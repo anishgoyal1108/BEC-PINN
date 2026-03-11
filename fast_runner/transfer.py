@@ -1,0 +1,1373 @@
+import os
+import re
+import subprocess
+import time
+
+from .batch import run_simulation, run_single_ubmax
+from .cache import find_or_create_ground_state_omega
+from .physics import T_nK_from_ubmax_seu, ubmax_scaled_from_T_nK
+from .runs import find_existing_runs, find_runs_grouped_by_omega, find_sim_folder
+from .settings import (
+    BINARY_SEARCH_MAX_ITER,
+    BOOTSTRAP_LEFT_NK,
+    BOOTSTRAP_RIGHT_MAX_NK,
+    BOOTSTRAP_RIGHT_NK,
+    BOOTSTRAP_STEP_NK,
+    FALLBACK_SCAN_STEP_NK,
+    OMEGA_ZERO_FIRST_TRANSFER_NK,
+    OUTPUT_DAT_DIR,
+    OUTPUT_LOG_DIR,
+    OUTPUT_PNG_DIR,
+    RELEASE_LINE_INDEX,
+    SCRIPT_DIR,
+    get_critical_omega_cache_path,
+    get_critical_summary_png_path,
+    get_geometry_mode,
+    get_imag_only_mode,
+    get_transfer_log_path_omega,
+    get_transfer_log_path_ubmax,
+    get_transfer_summary_png_path_omega,
+    get_transfer_summary_png_path_ubmax,
+    TOLERANCE_NK,
+    UB_NK_MATCH_TOLERANCE,
+    WINDOW_TARGET_NK,
+    get_sweep_mode,
+)
+from .templates import prepare_directory, ub_str_for_dir, validate_template_dir
+from .ui import build_group_options, select_from_menu
+
+
+def _geom_mode(mode: str | None = None) -> str:
+    return (mode or get_geometry_mode()).lower()
+
+
+def _require_real_time_mode(feature_name: str) -> bool:
+    if get_imag_only_mode():
+        print(
+            f"\n{feature_name} requires FULL execution mode (real-time enabled). "
+            "Toggle execution mode in the main menu and retry."
+        )
+        return False
+    return True
+
+
+def _transfer_vs_ubmax_dat_path(dat_dir: str, omega: float, mode: str | None = None) -> str:
+    geometry_mode = _geom_mode(mode)
+    return os.path.join(dat_dir, f"transfer_vs_ubmax_omega_{omega:.4f}_geom_{geometry_mode}.dat")
+
+def _transfer_vs_omega_dat_path(dat_dir: str, ubmax_seu: float, mode: str | None = None) -> str:
+    geometry_mode = _geom_mode(mode)
+    return os.path.join(
+        dat_dir,
+        f"transfer_vs_omega_ubmax_{ubmax_seu:.4f}_geom_{geometry_mode}.dat",
+    )
+
+def _critical_omega_cache_path(mode: str | None = None) -> str:
+    return get_critical_omega_cache_path(mode)
+
+
+def _read_critical_omega_cache(dat_path: str) -> list[tuple[float, float, float]]:
+    rows: list[tuple[float, float, float]] = []
+    if not os.path.isfile(dat_path):
+        return rows
+    with open(dat_path, "r") as f:
+        for line in f:
+            if line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            try:
+                ub_nk = float(parts[0])
+                ub_seu = float(parts[1])
+                crit_omega = float(parts[2])
+            except ValueError:
+                continue
+            rows.append((ub_nk, ub_seu, crit_omega))
+    return rows
+
+
+def _write_critical_omega_cache(dat_path: str, rows: list[tuple[float, float, float]]) -> None:
+    os.makedirs(os.path.dirname(dat_path), exist_ok=True)
+    rows_sorted = sorted(rows, key=lambda r: r[0])
+    deduped: list[tuple[float, float, float]] = []
+    seen: set[float] = set()
+    for ub_nk, ub_seu, crit_omega in rows_sorted:
+        key = round(ub_nk, 4)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((ub_nk, ub_seu, crit_omega))
+    with open(dat_path, "w") as f:
+        f.write("# Ubmax_nK Ubmax_SEU Critical_Omega_R\n")
+        for ub_nk, ub_seu, crit_omega in deduped:
+            f.write(f"{ub_nk:.4f} {ub_seu:.4f} {crit_omega:.4f}\n")
+
+
+def _ensure_critical_omega_cached(dat_path: str, ub_nk: float, ub_seu: float, crit_omega: float) -> None:
+    rows = _read_critical_omega_cache(dat_path)
+    ub_key = round(ub_nk, 4)
+    existing = {round(r[0], 4) for r in rows}
+    if ub_key in existing:
+        _write_critical_omega_cache(dat_path, rows)
+        return
+    rows.append((ub_nk, ub_seu, crit_omega))
+    _write_critical_omega_cache(dat_path, rows)
+
+
+def extract_bottom_winding_at_release(
+    circ_path: str, release_line: int = RELEASE_LINE_INDEX
+) -> float | None:
+    try:
+        with open(circ_path, "r") as f:
+            for idx, line in enumerate(f, start=1):
+                if idx == release_line:
+                    parts = line.split()
+                    if len(parts) < 3:
+                        return None
+                    try:
+                        return float(parts[2])
+                    except ValueError:
+                        return None
+            return None
+    except OSError:
+        return None
+
+
+def _round_winding(winding: float) -> float:
+    if abs(winding - 1.0) <= abs(winding):
+        return 1.0
+    return 0.0
+
+
+def _is_transfer(wn: float) -> bool:
+    return round(wn) == 1
+
+
+def _collect_release_winding_rows(runs: list[dict], x_from_run) -> list[tuple[float, float]]:
+    data_rows: list[tuple[float, float]] = []
+    for run in runs:
+        run_dir = run["path"]
+        run_dir_name = run["dir_name"]
+        real_folder = find_sim_folder(run_dir, run_dir_name, "real")
+        if real_folder is None:
+            continue
+
+        circ_file = os.path.join(real_folder, "circulation.dat")
+        if not os.path.isfile(circ_file):
+            continue
+
+        bottom_winding = extract_bottom_winding_at_release(circ_file)
+        if bottom_winding is None:
+            continue
+
+        rounded_winding = _round_winding(bottom_winding)
+        x_val = x_from_run(run)
+        data_rows.append((x_val, rounded_winding))
+
+    data_rows.sort(key=lambda row: row[0])
+    return data_rows
+
+
+def build_transfer_dat_for_omega(omega: float, dat_dir: str) -> bool:
+    runs_grouped = find_runs_grouped_by_omega()
+    omega_key = f"{omega:.4f}"
+    if omega_key not in runs_grouped:
+        return False
+
+    geometry_mode = _geom_mode()
+    runs = [
+        run
+        for run in runs_grouped[omega_key]
+        if run.get("geometry", "ring") == geometry_mode
+    ]
+    if not runs:
+        return False
+    data_rows = _collect_release_winding_rows(
+        runs,
+        lambda run: T_nK_from_ubmax_seu(run["ub_float"]),
+    )
+    if not data_rows:
+        return False
+
+    os.makedirs(dat_dir, exist_ok=True)
+    data_filename = _transfer_vs_ubmax_dat_path(dat_dir, omega, geometry_mode)
+    with open(data_filename, "w") as f:
+        f.write(
+            "# Ubmax (nK) vs bottom-ring winding number at release time\n"
+            f"# Omega = {omega:.4f}, release line = {RELEASE_LINE_INDEX}, geometry = {geometry_mode}\n"
+            "# Columns: Ubmax_nK  bottom_ring_winding_rounded\n"
+        )
+        for ub, wn in data_rows:
+            f.write(f"{ub:.6f} {wn:.6f}\n")
+    return True
+
+
+def build_transfer_dat_for_ubmax(ub_key: str, dat_dir: str) -> bool:
+    runs_grouped = find_existing_runs()
+    if ub_key not in runs_grouped:
+        return False
+
+    geometry_mode = _geom_mode()
+    runs = [
+        run
+        for run in runs_grouped[ub_key]
+        if run.get("geometry", "ring") == geometry_mode
+    ]
+    if not runs:
+        return False
+    data_rows = _collect_release_winding_rows(runs, lambda run: run["omega"])
+    if not data_rows:
+        return False
+
+    os.makedirs(dat_dir, exist_ok=True)
+    ub_float = runs[0]["ub_float"]
+    ub_nk = T_nK_from_ubmax_seu(ub_float)
+    data_filename = _transfer_vs_omega_dat_path(dat_dir, ub_float, geometry_mode)
+    with open(data_filename, "w") as f:
+        f.write(
+            "# Omega_R vs bottom-ring winding number at release time\n"
+            f"# Ubmax = {ub_nk:.3f} nK (fixed), release line = {RELEASE_LINE_INDEX}, geometry = {geometry_mode}\n"
+            "# Columns: Omega_R  bottom_ring_winding_rounded\n"
+        )
+        for om, wn in data_rows:
+            f.write(f"{om:.6f} {wn:.6f}\n")
+    return True
+
+
+def read_transfer_dat(omega: float, dat_dir: str) -> list[tuple[float, float]]:
+    path = _transfer_vs_ubmax_dat_path(dat_dir, omega)
+    if not os.path.isfile(path):
+        return []
+
+    rows: list[tuple[float, float]] = []
+    with open(path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) >= 2:
+                try:
+                    ub_nk = float(parts[0])
+                    wn = float(parts[1])
+                    rows.append((ub_nk, wn))
+                except ValueError:
+                    pass
+    return rows
+
+
+def _first_transition_bracket(
+    no_transfer: list[float], transfer: list[float]
+) -> tuple[float, float] | None:
+    if not no_transfer or not transfer:
+        return None
+    right_first = min(transfer)
+    below = [ub for ub in no_transfer if ub < right_first]
+    if not below:
+        return None
+    left_first = max(below)
+    return (left_first, right_first)
+
+
+def extract_critical_ubmax_nK(omega: float, dat_dir: str) -> float | None:
+    rows = read_transfer_dat(omega, dat_dir)
+    if not rows:
+        return None
+    no_transfer = [ub for ub, wn in rows if not _is_transfer(wn)]
+    transfer = [ub for ub, wn in rows if _is_transfer(wn)]
+    bracket = _first_transition_bracket(no_transfer, transfer)
+    if bracket is None:
+        return None
+    _, right = bracket
+    return right
+
+
+def is_omega_complete(omega: float, dat_dir: str) -> bool:
+    rows = read_transfer_dat(omega, dat_dir)
+    no_transfer = [ub for ub, wn in rows if not _is_transfer(wn)]
+    transfer = [ub for ub, wn in rows if _is_transfer(wn)]
+    bracket = _first_transition_bracket(no_transfer, transfer)
+    if bracket is None:
+        return False
+    left, right = bracket
+    return right - left <= WINDOW_TARGET_NK
+
+
+def closest_ub_nk_to_target(
+    rows: list[tuple[float, float]], target_nK: float
+) -> float | None:
+    if not rows:
+        return None
+    return min(rows, key=lambda r: abs(r[0] - target_nK))[0]
+
+
+def get_existing_result_at(
+    rows: list[tuple[float, float]],
+    ub_nk: float,
+    tolerance: float = UB_NK_MATCH_TOLERANCE,
+) -> bool | None:
+    for u, wn in rows:
+        if abs(u - ub_nk) <= tolerance:
+            return _is_transfer(wn)
+    return None
+
+
+def _compute_bracket_from_existing(
+    rows: list[tuple[float, float]], prev_critical_nK: float | None
+) -> tuple[float, float] | None:
+    no_transfer = [ub for ub, wn in rows if not _is_transfer(wn)]
+    transfer = [ub for ub, wn in rows if _is_transfer(wn)]
+    bracket = _first_transition_bracket(no_transfer, transfer)
+    if bracket is not None:
+        return bracket
+    if no_transfer and prev_critical_nK is not None:
+        left = max(no_transfer)
+        right = prev_critical_nK + TOLERANCE_NK
+        if left < right:
+            return (left, right)
+    if transfer and prev_critical_nK is not None:
+        right = min(transfer)
+        left = prev_critical_nK - TOLERANCE_NK
+        if left < right:
+            return (left, right)
+    return None
+
+
+def check_transfer_for_run(run_dir_path: str, run_dir_name: str) -> bool:
+    real_folder = find_sim_folder(run_dir_path, run_dir_name, "real")
+    if real_folder is None:
+        return False
+    circ_file = os.path.join(real_folder, "circulation.dat")
+    if not os.path.isfile(circ_file):
+        return False
+    bottom_winding = extract_bottom_winding_at_release(circ_file)
+    if bottom_winding is None:
+        return False
+    return _round_winding(bottom_winding) == 1.0
+
+
+def _generate_transfer_png(omega: float, dat_dir: str, png_dir: str | None = None) -> bool:
+    geometry_mode = _geom_mode()
+    dat_filename = _transfer_vs_ubmax_dat_path(dat_dir, omega, geometry_mode)
+    if not os.path.isfile(dat_filename):
+        return False
+
+    png_path = get_transfer_summary_png_path_ubmax(omega, geometry_mode)
+
+    first_transfer_nK = None
+    with open(dat_filename, "r") as f:
+        for line in f:
+            if line.strip().startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) >= 2:
+                val_nk = float(parts[0])
+                wn = float(parts[1])
+                if _is_transfer(wn):
+                    first_transfer_nK = val_nk
+                    break
+
+    extra_label = ""
+    if first_transfer_nK is not None:
+        extra_label = (
+            f"set label 'Ub_c = {first_transfer_nK:.2f} nK' at {first_transfer_nK}, "
+            "0.5 center offset 0,1.2 boxed;"
+        )
+
+    gnu_script = (
+        "set term pngcairo size 800,600;"
+        f"set output '{png_path}';"
+        "set xlabel 'Umax (nK)';"
+        "set ylabel 'bottom-ring winding number (wn)';"
+        f"set title 'transfer for Omega_R={omega:.4f} ({geometry_mode}) (wn = 0 = no; wn = 1 = yes)';"
+        "set grid;"
+        "set yrange [-0.2:1.2];"
+        f"{extra_label}"
+        f"plot '{dat_filename}' using 1:2 with lp lc rgb 'red' pt 7 ps 1.0 notitle;"
+        "set output;"
+    )
+    result = subprocess.run(["gnuplot", "-e", gnu_script], capture_output=True)
+    return result.returncode == 0
+
+
+def _generate_transfer_png_omega_sweep(
+    ub_key: str, ub_nk: float, dat_dir: str, png_dir: str | None = None
+) -> bool:
+    runs_grouped = find_existing_runs()
+    if ub_key in runs_grouped:
+        ub_float = runs_grouped[ub_key][0]["ub_float"]
+    else:
+        ub_float = float(ub_key)
+
+    geometry_mode = _geom_mode()
+    dat_filename = _transfer_vs_omega_dat_path(dat_dir, ub_float, geometry_mode)
+    if not os.path.isfile(dat_filename):
+        return False
+
+    png_path = get_transfer_summary_png_path_omega(ub_float, geometry_mode)
+
+    gnu_script = (
+        "set term pngcairo size 800,600;"
+        f"set output '{png_path}';"
+        "set xlabel 'Omega_R (rad/s)';"
+        "set ylabel 'bottom-ring winding number (wn)';"
+        f"set title 'transfer for Ubmax={ub_nk:.2f} nK ({geometry_mode}) (wn = 0 = no; wn = 1 = yes)';"
+        "set grid;"
+        "set yrange [-0.2:1.2];"
+        f"plot '{dat_filename}' using 1:2 with lp lc rgb 'red' pt 7 ps 1.0 notitle;"
+        "set output;"
+    )
+    result = subprocess.run(["gnuplot", "-e", gnu_script], capture_output=True)
+    return result.returncode == 0
+
+
+def binary_search_one_omega(
+    omega: float,
+    prev_critical_nK: float | None,
+    diag_stride: int,
+    log_path: str,
+    dat_dir: str,
+) -> float:
+    geometry_mode = _geom_mode()
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    runs_grouped = find_runs_grouped_by_omega()
+    omega_key = f"{omega:.4f}"
+    has_runs = omega_key in runs_grouped
+
+    dat_path = _transfer_vs_ubmax_dat_path(dat_dir, omega)
+    if not os.path.isfile(dat_path) and has_runs:
+        build_transfer_dat_for_omega(omega, dat_dir)
+
+    rows = read_transfer_dat(omega, dat_dir)
+    bracket = _compute_bracket_from_existing(rows, prev_critical_nK)
+
+    effective_right_max = min(
+        BOOTSTRAP_RIGHT_MAX_NK,
+        OMEGA_ZERO_FIRST_TRANSFER_NK,
+        prev_critical_nK if prev_critical_nK is not None else OMEGA_ZERO_FIRST_TRANSFER_NK,
+    )
+
+    if bracket is not None:
+        left, right = bracket
+        right = min(right, effective_right_max)
+    else:
+        if prev_critical_nK is None:
+            left = BOOTSTRAP_LEFT_NK
+            right = min(BOOTSTRAP_RIGHT_NK, effective_right_max)
+        else:
+            right = min(prev_critical_nK, effective_right_max)
+            closest = closest_ub_nk_to_target(rows, prev_critical_nK)
+            if closest is not None and closest < right:
+                left = closest
+            else:
+                left = max(BOOTSTRAP_LEFT_NK, right - TOLERANCE_NK)
+
+    with open(log_path, "a") as log:
+        log.write(
+            f"Run started at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())} "
+            f"(AUTO binary search, omega={omega:.4f}, geometry={geometry_mode}, "
+            f"bracket=[{left:.3f},{right:.3f}] nK)\n"
+        )
+        log.flush()
+
+    def run_probe(ub_nk: float) -> tuple[bool, str, float, int]:
+        rows = read_transfer_dat(omega, dat_dir)
+        existing = get_existing_result_at(rows, ub_nk)
+        if existing is not None:
+            return (existing, "", 0.0, 0)
+
+        run_dir_name, elapsed, exit_code = run_single_ubmax(omega, ub_nk, diag_stride)
+        if exit_code != 0:
+            mid_alt = ub_nk + 0.05
+            existing_alt = get_existing_result_at(read_transfer_dat(omega, dat_dir), mid_alt)
+            if existing_alt is not None:
+                return (existing_alt, "", 0.0, 0)
+            run_dir_name_alt, elapsed_alt, exit_code_alt = run_single_ubmax(
+                omega, mid_alt, diag_stride
+            )
+            if exit_code_alt != 0:
+                return (False, run_dir_name, elapsed, exit_code)
+            run_dir_name, elapsed, exit_code = (
+                run_dir_name_alt,
+                elapsed_alt,
+                exit_code_alt,
+            )
+
+        has_transfer = check_transfer_for_run(os.path.join(SCRIPT_DIR, run_dir_name), run_dir_name)
+        build_transfer_dat_for_omega(omega, dat_dir)
+        return (has_transfer, run_dir_name, elapsed, exit_code)
+
+    iteration = 0
+    while True:
+        iteration += 1
+        if iteration > BINARY_SEARCH_MAX_ITER:
+            print(
+                f"  Warning: Omega_R={omega:.4f} - max iterations ({BINARY_SEARCH_MAX_ITER}) reached"
+            )
+            with open(log_path, "a") as log:
+                log.write("  [bootstrap] max iterations reached, breaking\n")
+                log.flush()
+            break
+
+        rows = read_transfer_dat(omega, dat_dir)
+        no_transfer_list = [ub for ub, wn in rows if not _is_transfer(wn)]
+        transfer_list = [ub for ub, wn in rows if _is_transfer(wn)]
+        has_both = bool(no_transfer_list and transfer_list)
+        has_any = bool(no_transfer_list or transfer_list)
+        bracket_rejected_above_cap = False
+
+        if has_both:
+            bracket_first = _first_transition_bracket(no_transfer_list, transfer_list)
+            if bracket_first is not None:
+                left_data, right_data = bracket_first
+                right_data = min(right_data, effective_right_max)
+                if left_data >= right_data:
+                    bracket_rejected_above_cap = True
+                    has_both = False
+                elif right_data - left_data <= WINDOW_TARGET_NK:
+                    left, right = left_data, right_data
+                    break
+                if right_data - left_data > BOOTSTRAP_STEP_NK:
+                    probe_check = right_data - BOOTSTRAP_STEP_NK
+                    if probe_check > left_data and get_existing_result_at(rows, probe_check) is None:
+                        with open(log_path, "a") as log:
+                            log.write(
+                                f"  [sanity] wide bracket [{left_data:.2f},{right_data:.2f}], "
+                                f"probing left at {probe_check:.2f} nK to avoid missing first transition\n"
+                            )
+                            log.flush()
+                        _ = run_probe(probe_check)
+                        continue
+                left, right = left_data, right_data
+            else:
+                has_both = False
+
+        if not has_any:
+            mid = (left + right) / 2.0
+            with open(log_path, "a") as log:
+                log.write(f"  [bootstrap] no data yet, probing middle: ub_nk={mid:.3f}\n")
+                log.flush()
+            existing = get_existing_result_at(rows, mid)
+            if existing is not None:
+                has_transfer = existing
+                with open(log_path, "a") as log:
+                    log.write(
+                        f"  [reused] ub_nk={mid:.3f} from existing dat -> "
+                        f"{'TRANSFER' if has_transfer else 'NO TRANSFER'}\n"
+                    )
+                    log.flush()
+            else:
+                has_transfer, run_dir_name, elapsed, exit_code = run_probe(mid)
+                with open(log_path, "a") as log:
+                    log.write(
+                        f"  {run_dir_name} (OmegaR={omega:.4f}): {elapsed:.2f}s, exit_code={exit_code}\n"
+                    )
+                    log.flush()
+            if has_transfer:
+                right = mid
+            else:
+                left = mid
+        elif has_both:
+            bracket_first = _first_transition_bracket(no_transfer_list, transfer_list)
+            if bracket_first is None:
+                left = BOOTSTRAP_LEFT_NK
+                right = BOOTSTRAP_RIGHT_NK
+            else:
+                left, right = bracket_first
+                right = min(right, effective_right_max)
+            if right - left <= WINDOW_TARGET_NK:
+                break
+
+            mid = (left + right) / 2.0
+            existing = get_existing_result_at(rows, mid)
+            if existing is not None:
+                has_transfer = existing
+                with open(log_path, "a") as log:
+                    log.write(
+                        f"  [reused] ub_nk={mid:.3f} from existing dat -> "
+                        f"{'TRANSFER' if has_transfer else 'NO TRANSFER'}\n"
+                    )
+                    log.flush()
+            else:
+                has_transfer, run_dir_name, elapsed, exit_code = run_probe(mid)
+                with open(log_path, "a") as log:
+                    if run_dir_name:
+                        log.write(
+                            f"  {run_dir_name} (OmegaR={omega:.4f}): {elapsed:.2f}s, exit_code={exit_code}\n"
+                        )
+                    else:
+                        log.write(
+                            f"  [reused] ub_nk={mid:.3f} (retry) -> "
+                            f"{'TRANSFER' if has_transfer else 'NO TRANSFER'}\n"
+                        )
+                    log.flush()
+            if has_transfer:
+                right = mid
+            else:
+                left = mid
+        else:
+            if (not no_transfer_list) or bracket_rejected_above_cap:
+                lowest_transfer = min(transfer_list) if transfer_list else right
+                probe = lowest_transfer - BOOTSTRAP_STEP_NK
+                probe = max(probe, BOOTSTRAP_LEFT_NK)
+                if probe <= BOOTSTRAP_LEFT_NK + 0.01:
+                    with open(log_path, "a") as log:
+                        log.write(
+                            f"  [bootstrap] only transfer up to lower bound {BOOTSTRAP_LEFT_NK} nK; "
+                            "critical likely < 40 nK\n"
+                        )
+                        log.flush()
+                    return lowest_transfer
+                with open(log_path, "a") as log:
+                    log.write(
+                        f"  [bootstrap] only transfer, stepping left: probe={probe:.3f} nK\n"
+                    )
+                    log.flush()
+            else:
+                highest_no_transfer = max(no_transfer_list)
+                if highest_no_transfer >= effective_right_max - 1e-4:
+                    while True:
+                        print(
+                            f"\n[!] Binary search failed to find transfer in range "
+                            f"[{min(no_transfer_list):.3f}, {effective_right_max:.3f}] nK."
+                        )
+                        print(
+                            f"[!] Last probe was {highest_no_transfer:.3f} nK. Cap is {effective_right_max:.3f} nK."
+                        )
+                        print("[!] Please specify parameters for a dense scan fallback:")
+
+                        try:
+                            start_str = input(
+                                f"    Start Ubmax [default: {min(no_transfer_list):.3f}]: "
+                            ).strip()
+                            scan_start = float(start_str) if start_str else min(no_transfer_list)
+
+                            end_str = input(
+                                f"    End Ubmax   [default: {effective_right_max:.3f}]: "
+                            ).strip()
+                            scan_end = float(end_str) if end_str else effective_right_max
+
+                            step_str = input(
+                                f"    Step size   [default: {FALLBACK_SCAN_STEP_NK:.3f}]: "
+                            ).strip()
+                            scan_step = float(step_str) if step_str else FALLBACK_SCAN_STEP_NK
+                        except ValueError:
+                            print("[!] Invalid input. Please enter numbers.")
+                            continue
+
+                        with open(log_path, "a") as log:
+                            log.write(
+                                f"  [INTERACTIVE FALLBACK] Scanning range [{scan_start:.3f}, {scan_end:.3f}] "
+                                f"with step {scan_step:.3f} nK.\n"
+                            )
+                            log.flush()
+
+                        current_scan = scan_start
+                        found_transfer = False
+                        found_ub = 0.0
+
+                        while current_scan <= scan_end + 1e-4:
+                            existing = get_existing_result_at(rows, current_scan)
+                            if existing is None:
+                                has_trans, run_name, elapsed_t, exit_c = run_probe(current_scan)
+
+                                with open(log_path, "a") as log:
+                                    log.write(
+                                        f"    [fallback] {run_name}: {elapsed_t:.2f}s -> "
+                                        f"{'TRANSFER' if has_trans else 'NO TRANSFER'}\n"
+                                    )
+                                    log.flush()
+
+                                if has_trans:
+                                    found_transfer = True
+                                    found_ub = current_scan
+                                    break
+                            else:
+                                if existing:
+                                    found_transfer = True
+                                    found_ub = current_scan
+                                    break
+
+                            current_scan += scan_step
+
+                        if found_transfer:
+                            right = found_ub
+                            left = max(BOOTSTRAP_LEFT_NK, right - BOOTSTRAP_STEP_NK)
+
+                            with open(log_path, "a") as log:
+                                log.write(
+                                    f"  [INTERACTIVE FALLBACK] SUCCESS! Found transfer at {right:.3f} nK.\n"
+                                )
+                                log.flush()
+                            break
+
+                        with open(log_path, "a") as log:
+                            log.write(
+                                f"  [FAILURE] Fallback scan found NO TRANSFER up to {scan_end:.3f} nK.\n"
+                            )
+                            log.flush()
+
+                        print(f"\n[!] Fallback scan found NO TRANSFER up to {scan_end:.3f} nK.")
+                        retry = (
+                            input("    Retry with different parameters? (y/n) [default: y]: ")
+                            .strip()
+                            .lower()
+                        )
+                        if retry == "n":
+                            raise RuntimeError(
+                                f"Omega_R={omega:.4f}: Interactive fallback failed to find transfer."
+                            )
+
+                    continue
+
+                probe = highest_no_transfer + BOOTSTRAP_STEP_NK
+                probe = min(probe, effective_right_max)
+
+                with open(log_path, "a") as log:
+                    log.write(
+                        f"  [bootstrap] only no_transfer, stepping right: probe={probe:.3f} nK\n"
+                    )
+                    log.flush()
+
+            existing = get_existing_result_at(rows, probe)
+            if existing is not None:
+                has_transfer = existing
+                with open(log_path, "a") as log:
+                    log.write(
+                        f"  [reused] ub_nk={probe:.3f} from existing dat -> "
+                        f"{'TRANSFER' if has_transfer else 'NO TRANSFER'}\n"
+                    )
+                    log.flush()
+            else:
+                has_transfer, run_dir_name, elapsed, exit_code = run_probe(probe)
+                with open(log_path, "a") as log:
+                    log.write(
+                        f"  {run_dir_name} (OmegaR={omega:.4f}): {elapsed:.2f}s, exit_code={exit_code}\n"
+                    )
+                    log.flush()
+
+            if has_transfer:
+                right = probe
+                left = max(BOOTSTRAP_LEFT_NK, right - BOOTSTRAP_STEP_NK)
+            else:
+                left = probe
+                right = min(effective_right_max, left + BOOTSTRAP_STEP_NK)
+
+    rows_final = read_transfer_dat(omega, dat_dir)
+    transfer_final = [ub for ub, wn in rows_final if _is_transfer(wn)]
+    if not transfer_final:
+        raise RuntimeError(
+            f"Omega_R={omega:.4f}: binary search ended without any transfer point. "
+            "Cannot determine critical ubmax without observing transfer."
+        )
+
+    return right
+
+
+def prompt_and_run_auto_transfer_search() -> None:
+    if not _require_real_time_mode("AUTO TRANSFER SEARCH"):
+        return
+    print("=" * 60)
+    print("AUTO TRANSFER SEARCH - Binary search for critical ubmax per Omega_R")
+    print("=" * 60)
+    omega_start = float(input("Enter omega_R start (e.g., 0.04): ").strip() or "0.04")
+    omega_end = float(input("Enter omega_R end (e.g., 3.0): ").strip() or "3.0")
+    omega_step = float(input("Enter omega_R step (e.g., 0.01): ").strip() or "0.01")
+    diag_stride_str = input("Enter diag_stride [15]: ").strip()
+    diag_stride = int(diag_stride_str) if diag_stride_str else 15
+
+    print("\n--- Configuration ---")
+    print(f"  Omega_R: {omega_start} to {omega_end}, step {omega_step}")
+    print(f"  diag_stride: {diag_stride}")
+    confirm = input("\nProceed? (y/n): ").strip().lower()
+    if confirm != "y":
+        print("Aborted.")
+        return
+    run_auto_transfer_search(omega_start, omega_end, omega_step, diag_stride)
+
+
+def run_auto_transfer_search(
+    omega_start: float,
+    omega_end: float,
+    omega_step: float,
+    diag_stride: int,
+) -> None:
+    if not _require_real_time_mode("AUTO TRANSFER SEARCH"):
+        return
+    try:
+        validate_template_dir()
+    except FileNotFoundError as exc:
+        print(f"\nERROR: {exc}")
+        return
+
+    omegas = []
+    o = omega_start
+    while o <= omega_end + 1e-9:
+        omegas.append(round(o, 4))
+        o += omega_step
+
+    print(f"\nAUTO mode: Omega_R range [{omega_start}, {omega_end}], step {omega_step}")
+    print(f"  Omegas: {omegas[:10]}{'...' if len(omegas) > 10 else ''} ({len(omegas)} total)")
+    print(f"  diag_stride={diag_stride}")
+
+    os.makedirs(OUTPUT_LOG_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DAT_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_PNG_DIR, exist_ok=True)
+
+    for omega in omegas:
+        omega_key = f"{omega:.4f}"
+        log_path = get_transfer_log_path_omega(omega_key, get_geometry_mode())
+
+        runs_grouped = find_runs_grouped_by_omega()
+        has_runs = omega_key in runs_grouped
+
+        if has_runs:
+            build_transfer_dat_for_omega(omega, OUTPUT_DAT_DIR)
+
+        if is_omega_complete(omega, OUTPUT_DAT_DIR):
+            print(
+                f"  [SKIP] Omega_R={omega:.4f} already complete (transfer + window <= 0.1 nK)"
+            )
+            continue
+
+        prev_omega = omega - omega_step
+        prev_critical = None
+        if prev_omega >= 0:
+            prev_critical = extract_critical_ubmax_nK(prev_omega, OUTPUT_DAT_DIR)
+
+        print(f"\n  Binary search for Omega_R={omega:.4f} (prev_critical={prev_critical})")
+        critical = binary_search_one_omega(
+            omega, prev_critical, diag_stride, log_path, OUTPUT_DAT_DIR
+        )
+        print(f"  Critical ubmax for Omega_R={omega:.4f}: {critical:.3f} nK")
+
+        if _generate_transfer_png(omega, OUTPUT_DAT_DIR, OUTPUT_PNG_DIR):
+            print(
+                "  PNG created: "
+                + get_transfer_summary_png_path_ubmax(omega, get_geometry_mode())
+            )
+
+
+def binary_search_one_ubmax(
+    ubmax_seu: float,
+    prev_critical_omega: float | None,
+    omega_max: float,
+    diag_stride: int,
+    log_path: str,
+    output_dat_dir: str,
+) -> float:
+    OMEGA_STEP = 0.01
+    left = prev_critical_omega if prev_critical_omega is not None else 0.0
+    left = round(round(left / OMEGA_STEP) * OMEGA_STEP, 2)
+
+    with open(log_path, "a") as log:
+        log.write(
+            f"Run started at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())} "
+            f"(AUTO OMEGA search, Ubmax={ubmax_seu:.4f}, start_scan_from={left:.2f})\n"
+        )
+        log.flush()
+
+    geometry_mode = _geom_mode()
+    ub_str = ub_str_for_dir(ubmax_seu)
+
+    build_transfer_dat_for_ubmax(f"{ubmax_seu:.4f}", output_dat_dir)
+
+    dat_vs_omega_path = _transfer_vs_omega_dat_path(output_dat_dir, ubmax_seu, geometry_mode)
+    if not os.path.isfile(dat_vs_omega_path):
+        with open(dat_vs_omega_path, "w") as f:
+            f.write("# Omega Transfer(0/1)\n")
+
+    def run_probe_fixed_ubmax(omega_val: float) -> tuple[bool, str, float, int]:
+        run_dir_name = prepare_directory(
+            omega_val,
+            ubmax_seu,
+            ub_str,
+            diag_stride,
+            geometry_mode=geometry_mode,
+        )
+        run_dir = os.path.join(SCRIPT_DIR, run_dir_name)
+
+        cache_path = find_or_create_ground_state_omega(
+            omega_val,
+            [run_dir_name],
+            geometry_mode=geometry_mode,
+        )
+        _, elapsed, exit_code = run_simulation(
+            run_dir_name, cached_ground_state=cache_path
+        )
+
+        has_transfer = False
+        if exit_code == 0:
+            has_transfer = check_transfer_for_run(run_dir, run_dir_name)
+
+        run_result = (has_transfer, run_dir_name, elapsed, exit_code)
+
+        already_logged = False
+        if os.path.isfile(dat_vs_omega_path):
+            with open(dat_vs_omega_path, "r") as f:
+                for line in f:
+                    if line.startswith("#"):
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 2 and abs(float(parts[0]) - omega_val) < 1e-5:
+                        already_logged = True
+                        break
+
+        if not already_logged:
+            with open(dat_vs_omega_path, "a") as f:
+                f.write(f"{omega_val:.4f} {1 if has_transfer else 0}\n")
+
+        return run_result
+
+    iteration = 0
+    while True:
+        iteration += 1
+        if iteration > BINARY_SEARCH_MAX_ITER:
+            print(
+                f"  Warning: Ubmax={ubmax_seu:.4f} - max iterations ({BINARY_SEARCH_MAX_ITER}) reached"
+            )
+            with open(log_path, "a") as log:
+                log.write("  [bootstrap] max iterations reached, breaking\n")
+                log.flush()
+            break
+
+        dat_filename = _transfer_vs_omega_dat_path(output_dat_dir, ubmax_seu, geometry_mode)
+        rows = []
+        if os.path.isfile(dat_filename):
+            with open(dat_filename, "r") as f:
+                for line in f:
+                    if line.startswith("#"):
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        rows.append((float(parts[0]), float(parts[1])))
+
+        no_transfer_list = [om for om, wn in rows if not _is_transfer(wn)]
+        transfer_list = [om for om, wn in rows if _is_transfer(wn)]
+        has_both = bool(no_transfer_list and transfer_list)
+        has_any = bool(no_transfer_list or transfer_list)
+
+        if has_both:
+            right_first = min(transfer_list)
+            below = [om for om in no_transfer_list if om < right_first]
+            if not below:
+                if right_first <= left + 1e-9:
+                    return right_first
+            else:
+                left_first = max(below)
+                if right_first - left_first <= 0.03 + 1e-9:
+                    return right_first
+
+                left, right = left_first, right_first
+                mid = (left + right) / 2.0
+                mid = round(round(mid / OMEGA_STEP) * OMEGA_STEP, 2)
+
+                if mid <= left or mid >= right:
+                    return right
+
+                run_probe_fixed_ubmax(mid)
+                continue
+
+        if not has_any:
+            mid = left
+            run_probe_fixed_ubmax(mid)
+            continue
+
+        if not has_both:
+            if transfer_list:
+                current_min_transfer = min(transfer_list)
+                right = current_min_transfer
+
+                if no_transfer_list:
+                    left = max(no_transfer_list)
+
+                if right - left <= 0.03 + 1e-9:
+                    return right
+
+                if right - left <= 0.01 + 1e-9:
+                    return right
+
+                mid = (left + right) / 2.0
+                mid = round(round(mid / OMEGA_STEP) * OMEGA_STEP, 2)
+
+                if mid <= left or mid >= right:
+                    return right
+
+                run_probe_fixed_ubmax(mid)
+                continue
+
+            current_max_no_transfer = max(no_transfer_list)
+            left = current_max_no_transfer
+
+            next_right = round(left + 0.01, 2)
+
+            if next_right > omega_max:
+                if left >= omega_max - 1e-9:
+                    print(f"  [Warning] No transfer found up to max Omega_R={omega_max:.2f}")
+                    return omega_max
+                next_right = omega_max
+
+            run_probe_fixed_ubmax(next_right)
+            continue
+
+    final_omega = right
+    return final_omega
+
+
+def get_critical_omega_from_ubmax_log(log_dir: str, ubmax_nk: float) -> float | None:
+    mode = _geom_mode()
+    log_path = os.path.join(log_dir, f"ub_{ubmax_nk:.4f}_geom_{mode}.txt")
+    if not os.path.isfile(log_path):
+        return None
+
+    last_crit = None
+    with open(log_path, "r") as f:
+        for line in f:
+            if "Critical Omega=" in line:
+                idx = line.find("Critical Omega=")
+                if idx >= 0:
+                    rest = line[idx + len("Critical Omega=") :].strip()
+                    end = rest.find(",")
+                    if end >= 0:
+                        rest = rest[:end]
+                    try:
+                        last_crit = float(rest.strip())
+                    except ValueError:
+                        pass
+    return last_crit
+
+
+def get_prev_critical_omega_from_logs(
+    log_dir: str, below_ubmax_nk: float
+) -> float | None:
+    if not os.path.isdir(log_dir):
+        return None
+
+    mode = _geom_mode()
+    pattern = re.compile(rf"ub_([\d.]+)_geom_{mode}\.txt")
+    candidates = []
+    for name in os.listdir(log_dir):
+        m = pattern.match(name)
+        if not m:
+            continue
+        try:
+            u_nk = float(m.group(1))
+        except ValueError:
+            continue
+        if u_nk <= below_ubmax_nk:
+            continue
+        crit = get_critical_omega_from_ubmax_log(log_dir, u_nk)
+        if crit is not None:
+            candidates.append((u_nk, crit))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: x[0])
+    return candidates[0][1]
+
+
+def run_auto_omega_search(
+    ubmax_start_nk: float,
+    ubmax_end_nk: float,
+    ubmax_step_nk: float,
+    omega_min: float,
+    omega_max: float,
+    diag_stride: int,
+) -> None:
+    if not _require_real_time_mode("AUTO OMEGA SEARCH"):
+        return
+    try:
+        validate_template_dir()
+    except FileNotFoundError as exc:
+        print(f"\nERROR: {exc}")
+        return
+
+    geometry_mode = _geom_mode()
+    ubmax_nk_list = []
+    u = ubmax_start_nk
+    if ubmax_step_nk > 0:
+        ubmax_step_nk = -ubmax_step_nk
+
+    while u >= ubmax_end_nk - 1e-9:
+        ubmax_nk_list.append(round(u, 4))
+        u += ubmax_step_nk
+
+    print(
+        f"\nAUTO OMEGA mode: Ubmax range [{ubmax_start_nk}, {ubmax_end_nk}] nK, step {abs(ubmax_step_nk)}"
+    )
+    print(
+        f"  Ubmax list: {ubmax_nk_list[:10]}{'...' if len(ubmax_nk_list) > 10 else ''} ({len(ubmax_nk_list)} total)"
+    )
+    print(f"  Omega search: [{omega_min}, {omega_max}]")
+    print(f"  Geometry mode: {geometry_mode}")
+
+    os.makedirs(OUTPUT_LOG_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DAT_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_PNG_DIR, exist_ok=True)
+
+    dat_file_path = _critical_omega_cache_path(geometry_mode)
+    existing_rows = _read_critical_omega_cache(dat_file_path)
+    _write_critical_omega_cache(dat_file_path, existing_rows)
+    existing_results = {round(ub_nk, 4): crit for ub_nk, _ub_seu, crit in existing_rows}
+
+    prev_critical_omega = get_prev_critical_omega_from_logs(OUTPUT_LOG_DIR, ubmax_nk_list[0])
+    if prev_critical_omega is None:
+        prev_critical_omega = 0.0
+
+    for ubmax_nk in ubmax_nk_list:
+        if ubmax_nk in existing_results:
+            print(f"  [SKIP] Ubmax={ubmax_nk:.4f} nK already complete.")
+            prev_critical_omega = get_critical_omega_from_ubmax_log(OUTPUT_LOG_DIR, ubmax_nk)
+            if prev_critical_omega is None:
+                prev_critical_omega = existing_results[ubmax_nk]
+            continue
+
+        ubmax_seu = ubmax_scaled_from_T_nK(ubmax_nk)
+        log_path = get_transfer_log_path_ubmax(ubmax_nk, geometry_mode)
+
+        with open(log_path, "a") as log:
+            log.write(
+                f"\nSearch for Ubmax={ubmax_nk:.4f} nK (SEU={ubmax_seu:.2f}, geometry={geometry_mode})\n"
+            )
+
+        print(
+            f"\n  Binary search for Ubmax={ubmax_nk:.4f} nK (SEU={ubmax_seu:.2f}) "
+            f"[Prev Critical Omega={prev_critical_omega}, geometry={geometry_mode}]"
+        )
+
+        search_start = time.time()
+        crit_omega = binary_search_one_ubmax(
+            ubmax_seu,
+            prev_critical_omega,
+            omega_max,
+            diag_stride,
+            log_path,
+            OUTPUT_DAT_DIR,
+        )
+        elapsed = time.time() - search_start
+        elapsed_min = elapsed / 60.0
+
+        _ensure_critical_omega_cached(dat_file_path, ubmax_nk, ubmax_seu, crit_omega)
+        existing_results[round(ubmax_nk, 4)] = crit_omega
+
+        ub_key = ub_str_for_dir(ubmax_seu)
+        build_transfer_dat_for_ubmax(ub_key, OUTPUT_DAT_DIR)
+
+        ub_nk_val = T_nK_from_ubmax_seu(ubmax_seu)
+        _generate_transfer_png_omega_sweep(ub_key, ub_nk_val, OUTPUT_DAT_DIR, OUTPUT_PNG_DIR)
+
+        _generate_critical_omega_summary_png(OUTPUT_DAT_DIR, OUTPUT_PNG_DIR)
+
+        print(f"  Found Critical Omega={crit_omega:.2f}  ({elapsed_min:.1f} min / {elapsed:.0f} s)")
+
+        with open(log_path, "a") as log:
+            log.write(
+                f"  Search complete: Critical Omega={crit_omega:.4f}, "
+                f"elapsed={elapsed_min:.1f} min ({elapsed:.0f} s)\n"
+            )
+
+        prev_critical_omega = crit_omega
+
+    _generate_critical_omega_summary_png(OUTPUT_DAT_DIR, OUTPUT_PNG_DIR)
+    print(f"  Summary PNG created: {get_critical_summary_png_path(geometry_mode)}")
+
+
+def _generate_transfer_vs_omega_png(
+    ubmax_seu: float, dat_dir: str, png_dir: str
+) -> bool:
+    geometry_mode = _geom_mode()
+    dat_filename = _transfer_vs_omega_dat_path(dat_dir, ubmax_seu, geometry_mode)
+    if not os.path.isfile(dat_filename):
+        return False
+
+    ub_nk = T_nK_from_ubmax_seu(ubmax_seu)
+
+    os.makedirs(png_dir, exist_ok=True)
+    png_name = f"transfer_vs_omega_ubmax_{ubmax_seu:.4f}_geom_{geometry_mode}.png"
+    png_path = os.path.join(png_dir, png_name)
+
+    gnu_script = (
+        "set term pngcairo size 800,600;"
+        f"set output '{png_path}';"
+        "set xlabel 'Omega_R';"
+        "set ylabel 'Transfer (0=No, 1=Yes)';"
+        f"set title 'Transfer for Ubmax={ubmax_seu:.4f} SEU ({ub_nk:.2f} nK, {geometry_mode})';"
+        "set grid;"
+        "set yrange [-0.2:1.2];"
+        f"plot '{dat_filename}' using 1:2 with lp lc rgb 'blue' pt 7 ps 1.0 notitle;"
+        "set output;"
+    )
+    subprocess.run(["gnuplot", "-e", gnu_script], capture_output=True)
+    return os.path.isfile(png_path)
+
+
+def _generate_critical_omega_summary_png(dat_dir: str, png_dir: str | None = None) -> bool:
+    geometry_mode = _geom_mode()
+    dat_filename = _critical_omega_cache_path(geometry_mode)
+    if not os.path.isfile(dat_filename):
+        return False
+
+    png_path = get_critical_summary_png_path(geometry_mode)
+
+    gnu_script = (
+        "set term pngcairo size 800,600;"
+        f"set output '{png_path}';"
+        "set xlabel 'Ubmax (nK)';"
+        "set ylabel 'Critical Omega_R';"
+        f"set title 'Critical Rotation vs Barrier Height ({geometry_mode})';"
+        "set grid;"
+        f"plot '{dat_filename}' using 1:3 with lp lc rgb 'red' pt 7 ps 1.0 title 'Critical Omega';"
+        "set output;"
+    )
+    subprocess.run(["gnuplot", "-e", gnu_script], capture_output=True)
+    return os.path.isfile(png_path)
+
+
+def prompt_and_run_auto_omega_search() -> None:
+    if not _require_real_time_mode("AUTO OMEGA SEARCH"):
+        return
+    print("=" * 60)
+    print("AUTO OMEGA SEARCH - Binary search for critical Omega per Ubmax")
+    print("=" * 60)
+    ub_start = float(input("Enter Ubmax start (high nK, e.g., 48.5): ").strip() or "48.5")
+    ub_end = float(input("Enter Ubmax end (low nK, e.g., 40.0): ").strip() or "40.0")
+    ub_step = float(input("Enter Ubmax step size (nK, e.g., 0.5): ").strip() or "0.5")
+
+    om_min = 0.0
+    om_max = 7.0
+
+    diag_stride_str = input("Enter diag_stride [15]: ").strip()
+    diag_stride = int(diag_stride_str) if diag_stride_str else 15
+
+    print("\n--- Configuration ---")
+    print(f"  Ubmax: {ub_start} to {ub_end} nK, step {ub_step}")
+    print(f"  Omega Search Window: [{om_min}, {om_max}] (Dynamic Lower Bound)")
+    print(f"  diag_stride: {diag_stride}")
+
+    confirm = input("\nProceed? (y/n): ").strip().lower()
+    if confirm != "y":
+        print("Aborted.")
+        return
+
+    run_auto_omega_search(ub_start, ub_end, ub_step, om_min, om_max, diag_stride)
+
+
+def _read_omega_transfer_dat(dat_path: str) -> list[tuple[float, float]]:
+    data_rows_list: list[tuple[float, float]] = []
+    with open(dat_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) >= 2:
+                try:
+                    data_rows_list.append((float(parts[0]), float(parts[1])))
+                except ValueError:
+                    pass
+    return data_rows_list
+
+
+def run_transfer_vs_ubmax_plotter():
+    geometry_mode = _geom_mode()
+    print("=" * 60)
+    if get_sweep_mode() == "ubmax":
+        print("TRANSFER SUMMARY - Ubmax vs bottom-ring winding (fixed Omega)")
+    else:
+        print("TRANSFER SUMMARY - Omega_R vs bottom-ring winding (fixed Ubmax)")
+    print("=" * 60)
+
+    runs_grouped = find_existing_runs()
+    if not runs_grouped:
+        print("\nNo existing simulation runs found.")
+        return
+
+    group_list, group_label, _, group_options = build_group_options(runs_grouped)
+    from .settings import ensure_output_dirs
+    ensure_output_dirs()
+    dat_dir = OUTPUT_DAT_DIR
+    png_dir = OUTPUT_PNG_DIR
+
+    print(f"\nFound {len(group_list)} {group_label} values (fixed parameter):\n")
+    group_choice = select_from_menu(group_options, f"\nSelect {group_label}: ")
+    if group_choice == 0:
+        return
+
+    selected_group = group_list[group_choice - 1]
+
+    if get_sweep_mode() == "ubmax":
+        omega_value = float(selected_group)
+        runs = [
+            r
+            for r in runs_grouped[selected_group]
+            if r.get("geometry", "ring") == geometry_mode
+        ]
+        if not runs:
+            print(f"\nNo runs found for geometry={geometry_mode} in selected group.")
+            return
+        print(
+            f"\nProcessing {len(runs)} Ubmax value(s) for Omega = {omega_value:.4f} "
+            f"(release line = {RELEASE_LINE_INDEX}, geometry={geometry_mode})"
+        )
+        if not build_transfer_dat_for_omega(omega_value, dat_dir):
+            print("\nNo valid circulation.dat data found at the release line for any run.")
+            return
+
+        data_rows = read_transfer_dat(omega_value, dat_dir)
+        transfer_detected = any(_is_transfer(wn) for _, wn in data_rows)
+        for ub_nk, wn in data_rows:
+            ub_seu = ubmax_scaled_from_T_nK(ub_nk)
+            status = "TRANSFER" if _is_transfer(wn) else "NO TRANSFER"
+            print(
+                f"  Ubmax (SEU) = {ub_seu:.4f}, Ubmax (nK) = {ub_nk:.3f}, "
+                f"wn(rounded) = {wn:.0f} -> {status}"
+            )
+
+        if _generate_transfer_png(omega_value, dat_dir, png_dir):
+            print(f"\nSummary plot created: {get_transfer_summary_png_path_ubmax(omega_value, geometry_mode)}")
+        else:
+            print("\n  gnuplot reported an error while creating the summary plot.")
+    else:
+        runs = [
+            r
+            for r in runs_grouped[selected_group]
+            if r.get("geometry", "ring") == geometry_mode
+        ]
+        if not runs:
+            print(f"\nNo runs found for geometry={geometry_mode} in selected group.")
+            return
+        ub_nk = T_nK_from_ubmax_seu(runs[0]["ub_float"])
+        print(
+            f"\nProcessing {len(runs)} Omega value(s) for Ubmax = {ub_nk:.2f} nK "
+            f"(release line = {RELEASE_LINE_INDEX}, geometry={geometry_mode})"
+        )
+        if not build_transfer_dat_for_ubmax(selected_group, dat_dir):
+            print("\nNo valid circulation.dat data found at the release line for any run.")
+            return
+
+        ub_float = runs[0]["ub_float"]
+        dat_path = _transfer_vs_omega_dat_path(dat_dir, ub_float, geometry_mode)
+        data_rows_list = _read_omega_transfer_dat(dat_path)
+        transfer_detected = any(_is_transfer(wn) for _, wn in data_rows_list)
+
+        for omega_val, wn in data_rows_list:
+            status = "TRANSFER" if _is_transfer(wn) else "NO TRANSFER"
+            print(f"  Omega_R = {omega_val:.4f}, wn(rounded) = {wn:.0f} -> {status}")
+
+        if _generate_transfer_png_omega_sweep(selected_group, ub_nk, dat_dir, png_dir):
+            print(f"\nSummary plot created: {get_transfer_summary_png_path_omega(ub_float, geometry_mode)}")
+        else:
+            print("\n  gnuplot reported an error while creating the summary plot.")
+
+    if transfer_detected:
+        print(
+            "\nTransfer detected in at least one real-time run "
+            "(bottom-ring winding number at release is non-zero)."
+        )
+    else:
+        print(
+            "\nNo transfer detected in any processed real-time run "
+            "(bottom-ring winding number at release is zero)."
+        )

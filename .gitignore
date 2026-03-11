@@ -20,6 +20,7 @@ logs/
 outputs/
 checkpoints/
 runs/
+output/
 
 # Model files
 *.h5

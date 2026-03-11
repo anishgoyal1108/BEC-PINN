@@ -1,0 +1,125 @@
+#
+# This file contains the values of the parameters that
+# specify the array of double-target potentials.
+# (Mark Edwards, September, 2021)
+#
+c
+c	V0 = height of the double-target potential
+c            (real*8, scaled energy units)
+c
+c
+c
+2000.d0
+c
+c	a = relative depth of the disk and ring in the target potential
+c           (real*8, dimensionless)
+c
+c
+c
+1.d0
+c
+c	wd = width of the disk of the target potential
+c            (real*8, scaled length units)
+c
+c
+c
+1.d0
+c
+c	wr = width of the ring of the double-target potential
+c            (real*8, scaled length units)
+c
+c
+c
+0.5d0
+c
+c	R = radius of midtrack of the target potential
+c           (real*8, scaled length units)
+c
+c
+c
+2.25d0
+c
+c	n = exponent in the target potential
+c           (real*8, dimensionless)
+c
+c
+c
+1.d0
+c
+c	nrows = number of rows in the double-target array
+c               (integer*4, dimensionless)
+c
+c
+c
+2
+c
+c	ncols = number of columns in the double-target array
+c               (integer*4, dimensionless)
+c
+c
+c
+2
+c
+c	xc_array = x coordinate of the center of the double-target
+c                  array (real*8, scaled length units)
+c
+c
+c
+100.d0
+c
+c	yc_array = y coordinate of the center of the double-target
+c                  array (real*8, scaled length units)
+c
+c
+c
+100.d0
+c
+c	wperp = width of the Gaussian barrier perpendicular to the line
+c               joining the centers of the double target potential
+c               (real*8, scaled length units)
+c
+c
+ 0.1125D+01
+c
+c	wpara = width of the Gaussian barrier parallel to the line
+c               joining the centers of the double target potential
+c               (real*8, scaled length units)
+c
+c
+1.125d0
+c
+c	Ubmax(i,j) = array of maximum heights of the Gaussian barriers
+c                    the array. Each line contains the ncols values of 
+c                    Ubmax for the ith row, i = 1, nrows
+c                    (real*8, scaled energy units)
+c
+400.d0 385.d0
+430.d0 415.d0
+c
+c
+c       tramp_si = ramp time for rotation and barrier height
+c                  (real*8, seconds)
+c
+c
+0.100d0
+c
+c
+c       ton_si = time barrier is held at max height
+c                (real*8, seconds)
+c
+c
+0.100d0
+c
+c	tpi_si = time before barrier ramp-on start for 
+c                phase imprint evolution
+c                (real*8, seconds)
+c
+c
+0.025d0
+c
+c
+c	trel_si = system evolution time after barrier ramp-off
+c                 (real*8, seconds)
+c
+c
+0.005d0

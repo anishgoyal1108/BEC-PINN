@@ -1,0 +1,146 @@
+#
+#
+#	Split-Step, Gross-Pitaevskii Solver General Inputs
+#	         Tue 18 Jun 2013 02:26:11 PM EDT 
+#
+#
+c
+c
+c	Natoms = number of condensate atoms
+c	(real*8, dimensionless)
+c
+c
+166667.0d0
+c
+c
+c	Nx = number of points in x grid
+c	(integer*4, dimensionless)
+c
+c
+400
+c
+c
+c	Ny = number of points in y grid
+c	(integer*4, dimensionless)
+c
+c
+400
+c
+c
+c	dx = x-grid stepsize
+c	(real*8, scaled length units)
+c
+c
+0.061875d0
+c
+c
+c	dy = y-grid stepsize
+c	(real*8, scaled length units)
+c
+c
+0.061875d0
+c
+c	g_bar = 2d nonlinear coefficient (=8*pi*(a/a_H)/sqrt(2*pi)), 
+c               where a=scattering length
+c	(real*8, scaled energy*scaled area units)
+c g=0.0316 is for Sodium atoms
+c
+0.0316d0
+c
+c
+c	Nt = number of time steps in propagation
+c	(real*8, dimensionless)
+c
+c
+133443
+c
+c
+c	dt = time-grid stepsize
+c	(real*8, scaled time units)
+c
+c
+0.00004
+c
+c
+c	Nframes = number of wave functions (frames) to write to output files
+c	(integer*4, dimensionless)
+c
+c
+330
+c
+c
+c	tfi = time-stamp of the initial frame
+c	(real*8, scaled time units)
+c
+c
+0.d0
+c
+c
+c	tff = time-stamp of the final frame
+c	(real*8, scaled time units)
+c
+c
+5.33772d0
+c
+c
+c	L0 = length unit on which scaled units are based
+c	(real*8, METERS)
+c
+c
+10.0d-6
+c
+c	real_or_imag = flag for real or imaginary time integration
+c                      (integer*4, dimensionless)
+c                    = 0 imaginary time
+c                    = 1 real time 
+c
+1
+c
+c	read_initial_wf = flag for reading in "initial_wf.dat"
+c                       = 0 means NO, don't read it in
+c                       = 1 means YES, read it in
+c
+c
+1
+c
+c	output_frames = flag to decide whether to output data frames
+c                       (integer*4, dimensionless)
+c                     = 0 means NO
+c                     = 1 means YES
+c
+1
+c
+c       phase_imprint = flag for imprinting an initial if running in REAL TIME 
+c                       (integer*4, dimensionless)
+c                     = 0 means NO
+c                     = 1 means YES
+c
+1
+c
+c       with_diss = flag to decide whether dissipation is to be applied
+c                   (integer*4, dimensionless)
+c                 = 0 means NO
+c                 = 1 means YES
+c
+0
+c
+c       gamma_diss = value of dissipation parameter gamma (should be > 0)
+c                    (real*8, dimensionless)
+c
+c
+c
+0.0d0
+c
+c       omega_rf = speed of the rotating frame
+c                  (real*8, radians/second)
+c
+c
+c
+0.1d0
+c
+c       diag_stride = stride for computing diagnostics (circulation, phase jumps)
+c                     (integer*4, dimensionless)
+c                   = N > 0: compute every Nth time step
+c                   = 0 or negative: skip diagnostics entirely
+c
+15
