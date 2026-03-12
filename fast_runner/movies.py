@@ -4,6 +4,11 @@ import re
 import subprocess
 from concurrent.futures import ProcessPoolExecutor
 
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - optional dependency
+    np = None  # type: ignore[assignment]
+
 from .runs import find_existing_runs, find_sim_folder
 from .settings import (
     NUM_FRAME_WORKERS,
@@ -18,6 +23,89 @@ from .ui import (
     select_from_menu,
 )
 from .viewer import open_files_in_viewer
+
+
+def _estimate_density_cmax(
+    folder: str,
+    percentile: float = 98.0,
+    natoms: float = 666667.0,
+) -> float | None:
+    if np is None:
+        return None
+
+    values: list[float] = []
+    for path in glob.glob(os.path.join(folder, "wf_ascii_*.dat")):
+        try:
+            data = np.loadtxt(path, usecols=(2, 3))
+        except Exception:
+            continue
+        if data.size == 0:
+            continue
+        amp2 = data[:, 0] ** 2 + data[:, 1] ** 2
+        dens = amp2 * natoms
+        try:
+            values.append(float(np.percentile(dens, percentile)))
+        except Exception:
+            continue
+
+    if not values:
+        return None
+
+    return float(np.percentile(values, percentile))
+
+
+def _build_movie_gnu_script(kind: str, start: int, end: int, cmax: float | None = None) -> str:
+    header = (
+        "set key off\n"
+        "set pm3d\n"
+        "set view map\n"
+        "set size square\n"
+        "unset surface\n"
+        "xc_array = 100.0\n"
+        "yc_array = 100.0\n"
+        "half_xwidth=125.00\n"
+        "half_ywidth=125.00\n"
+        'set xlabel "X (micrometers)"\n'
+        'set ylabel "Y (micrometers)"\n'
+        "set xtics xc_array*10.0-half_xwidth,50.0,xc_array*10.0+half_xwidth\n"
+        "set ytics yc_array*10.0-half_ywidth,50.0,yc_array*10.0+half_ywidth\n"
+        "set xrange [xc_array*10.0-half_xwidth:xc_array*10.0+half_xwidth]\n"
+        "set yrange [yc_array*10.0-half_ywidth:yc_array*10.0+half_ywidth]\n"
+        "# set palette for NIST colormap\n"
+        "set palette defined (0.000 '#000080', 0.110 '#0000FF', 0.125 '#0000FF', \\\n"
+        "                     0.340 '#00DBFF', 0.350 '#00E6F7', 0.375 '#14FFE2', \\\n"
+        "                     0.640 '#EEFF08', 0.650 '#F7F600', 0.660 '#FFEC00', \\\n"
+        "                     0.890 '#FF1300', 0.910 '#E80000', 1.000 '#800000')\n"
+        "set term gif\n"
+    )
+
+    if kind == "density":
+        max_val = cmax if cmax is not None and cmax > 0 else 20000.0
+        body = (
+            "natoms=666667.0\n"
+            f"set cbrange [0.0:{max_val:.6g}]\n"
+            f"do for [i={start}:{end}] {{\n"
+            "set term gif\n"
+            "set output sprintf('density_distribution_%03d.gif',i)\n"
+            "set title sprintf('time = %03d ms',i)\n"
+            "splot sprintf('wf_ascii_%03d.dat',i) "
+            "u (($1)*10.0):(($2)*10.0):(($3*$3+$4*$4)*natoms) w l\n"
+            "}\n"
+        )
+    elif kind == "phase":
+        body = (
+            f"do for [i={start}:{end}] {{\n"
+            "set term gif\n"
+            "set output sprintf('phase_distribution_%03d.gif',i)\n"
+            "set title sprintf('phase frame %03d',i)\n"
+            "splot sprintf('wf_ascii_%03d.dat',i) "
+            "u (($1)*10.0):(($2)*10.0):(atan2($3,$4)) w l\n"
+            "}\n"
+        )
+    else:
+        raise ValueError(f"Unknown movie kind: {kind}")
+
+    return header + body
 
 
 def parse_frame_range(frame_str: str, available_range: tuple[int, int]) -> list[int]:
@@ -74,14 +162,22 @@ def _get_frame_range(folder: str) -> tuple[int, int] | None:
 
 
 def _run_gnuplot_chunk(folder: str, script_name: str, start: int, end: int) -> bool:
-    script_path = os.path.join(folder, script_name)
-    if not os.path.isfile(script_path):
-        return False
-    with open(script_path) as f:
-        content = f.read()
+    script_basename = os.path.basename(script_name)
 
-    content = re.sub(r"do for \[i=\d+:\d+\]", f"do for [i={start}:{end}]", content)
-    temp_script = os.path.join(folder, f"_temp_{script_name}.{start}_{end}")
+    if script_basename == "density_distribution_movie.gnu":
+        cmax = _estimate_density_cmax(folder)
+        content = _build_movie_gnu_script("density", start, end, cmax)
+    elif script_basename == "phase_distribution_movie.gnu":
+        content = _build_movie_gnu_script("phase", start, end)
+    else:
+        script_path = os.path.join(folder, script_name)
+        if not os.path.isfile(script_path):
+            return False
+        with open(script_path) as f:
+            content = f.read()
+        content = re.sub(r"do for \[i=\d+:\d+\]", f"do for [i={start}:{end}]", content)
+
+    temp_script = os.path.join(folder, f"_temp_{script_basename}.{start}_{end}")
     try:
         with open(temp_script, "w") as f:
             f.write(content)
@@ -103,16 +199,27 @@ def _run_gnuplot_frame(
     output_dir: str,
     output_name: str,
     bare_plot: bool = False,
+    bare_size: int = 600,
 ) -> bool:
-    if os.path.isabs(script_name):
-        script_path = script_name
-    else:
-        script_path = os.path.join(folder, script_name)
-    if not os.path.isfile(script_path):
-        return False
+    script_basename = os.path.basename(script_name)
 
-    with open(script_path) as f:
-        content = f.read()
+    if script_basename == "density_distribution_movie.gnu":
+        cmax = _estimate_density_cmax(folder)
+        content = _build_movie_gnu_script("density", frame_num, frame_num, cmax)
+        script_path = os.path.join(folder, script_basename)
+    elif script_basename == "phase_distribution_movie.gnu":
+        content = _build_movie_gnu_script("phase", frame_num, frame_num)
+        script_path = os.path.join(folder, script_basename)
+    else:
+        if os.path.isabs(script_name):
+            script_path = script_name
+        else:
+            script_path = os.path.join(folder, script_name)
+        if not os.path.isfile(script_path):
+            return False
+
+        with open(script_path) as f:
+            content = f.read()
 
     os.makedirs(output_dir, exist_ok=True)
     output_path_abs = os.path.abspath(os.path.join(output_dir, output_name))
@@ -195,7 +302,7 @@ def _run_gnuplot_frame(
         )
         content = re.sub(
             r"set term\s+png\b[^ \n]*",
-            'set term png size 600,600 background rgb "#000080"',
+            f'set term png size {bare_size},{bare_size} background rgb "#000080"',
             content,
             flags=re.IGNORECASE,
         )
@@ -324,23 +431,6 @@ def create_density_phase_frames(
     density_gnu = os.path.join(folder, "density_distribution_movie.gnu")
     phase_gnu = os.path.join(folder, "phase_distribution_movie.gnu")
 
-    if not os.path.isfile(density_gnu):
-        print("  Warning: density_distribution_movie.gnu not found")
-        return {
-            "density_count": 0,
-            "phase_count": 0,
-            "density_paths": [],
-            "phase_paths": [],
-        }
-    if not os.path.isfile(phase_gnu):
-        print("  Warning: phase_distribution_movie.gnu not found")
-        return {
-            "density_count": 0,
-            "phase_count": 0,
-            "density_paths": [],
-            "phase_paths": [],
-        }
-
     density_output_dir = get_density_frames_dir()
     phase_output_dir = get_phase_frames_dir()
 
@@ -359,6 +449,7 @@ def create_density_phase_frames(
 
     print(f"  Processing {len(frame_numbers)} frame(s) for density and phase...")
 
+    bare_size = 1200 if "_2x2_k" in run_dir_name else 600
     with ProcessPoolExecutor(max_workers=NUM_FRAME_WORKERS) as executor:
         futures = [
             executor.submit(
@@ -369,6 +460,7 @@ def create_density_phase_frames(
                 output_dir,
                 output_name,
                 True,
+                bare_size,
             )
             for frame_type, script_name, frame_num, output_dir, output_name in tasks
         ]
@@ -439,10 +531,6 @@ def create_density_phase_frames_batch(
     for folder, run_dir_name, frame_numbers in runs_data:
         density_gnu = os.path.join(folder, "density_distribution_movie.gnu")
         phase_gnu = os.path.join(folder, "phase_distribution_movie.gnu")
-        if do_density and not os.path.isfile(density_gnu):
-            continue
-        if do_phase and not os.path.isfile(phase_gnu):
-            continue
         if not do_density and not do_phase:
             continue
         for frame_num in frame_numbers:
@@ -493,10 +581,11 @@ def create_density_phase_frames_batch(
                 output_dir,
                 output_name,
                 True,
+                1200 if "_2x2_k" in run_dir_name else 600,
             )
             for (
                 _ft,
-                _rn,
+                run_dir_name,
                 folder,
                 script_path,
                 frame_num,
