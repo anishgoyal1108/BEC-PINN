@@ -13,7 +13,6 @@ from .settings import (
     BOOTSTRAP_RIGHT_NK,
     BOOTSTRAP_STEP_NK,
     FALLBACK_SCAN_STEP_NK,
-    OMEGA_LARGE_JUMP_THRESHOLD,
     OMEGA_REFINE_TOLERANCE,
     OMEGA_VERIFY_COUNT,
     OMEGA_ZERO_FIRST_TRANSFER_NK,
@@ -908,18 +907,12 @@ def verified_search_one_ubmax(
     accepted.  Any gap resets the counter, rejecting isolated
     dynamical-resonance spikes.
 
-    Optimization A: if the candidate omega is >= prev_critical_omega +
-    OMEGA_LARGE_JUMP_THRESHOLD, skip verification (large jumps are extremely
-    unlikely to be spikes).
-
     The *omega_step* parameter is the user-configured probe spacing (e.g. 0.01),
     passed from the main menu; this is separate from the Ubmax step used in the
     sweep.
     """
-    if prev_critical_omega is not None and prev_critical_omega > 0:
+    if prev_critical_omega is not None:
         start_omega = prev_critical_omega + omega_step
-    elif prev_critical_omega is not None:
-        start_omega = prev_critical_omega
     else:
         start_omega = 0.0
     start_omega = round(round(start_omega / omega_step) * omega_step, 4)
@@ -973,7 +966,7 @@ def verified_search_one_ubmax(
                     f"exit={exit_code}, skipping\n"
                 )
                 log.flush()
-            omega += OMEGA_STEP
+            omega += omega_step
             continue
 
         if has_transfer:
@@ -982,21 +975,6 @@ def verified_search_one_ubmax(
                 consecutive = 1
             else:
                 consecutive += 1
-
-            large_jump = (
-                prev_critical_omega is not None
-                and candidate >= prev_critical_omega + OMEGA_LARGE_JUMP_THRESHOLD
-            )
-            if large_jump:
-                with open(log_path, "a") as log:
-                    log.write(
-                        f"  [verified] large jump: candidate={candidate:.4f} >= "
-                        f"prev_crit+{OMEGA_LARGE_JUMP_THRESHOLD} "
-                        f"({prev_critical_omega:.4f}+{OMEGA_LARGE_JUMP_THRESHOLD}), "
-                        f"accepting without full verification\n"
-                    )
-                    log.flush()
-                break
 
             if consecutive >= verify_count:
                 with open(log_path, "a") as log:
@@ -1037,15 +1015,28 @@ def verified_search_one_ubmax(
 
         omega += omega_step
 
-    if candidate is not None:
+    if candidate is not None and consecutive >= verify_count:
         critical = candidate
     else:
         critical = omega_max
+        if candidate is not None:
+            with open(log_path, "a") as log:
+                log.write(
+                    f"  [verified] candidate {candidate:.4f} NOT accepted "
+                    f"(only {consecutive}/{verify_count} consecutive), "
+                    f"returning omega_max={omega_max:.4f}\n"
+                )
+                log.flush()
+            print(
+                f"  Candidate {candidate:.4f} not verified "
+                f"({consecutive}/{verify_count} consecutive), "
+                f"no verified critical omega found"
+            )
 
     with open(log_path, "a") as log:
         log.write(
             f"  Verified critical omega: {critical:.4f} "
-            f"(consecutive={consecutive})\n"
+            f"(consecutive={consecutive}/{verify_count})\n"
         )
         log.flush()
 
