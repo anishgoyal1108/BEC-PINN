@@ -13,6 +13,9 @@ from .settings import (
     BOOTSTRAP_RIGHT_NK,
     BOOTSTRAP_STEP_NK,
     FALLBACK_SCAN_STEP_NK,
+    OMEGA_LARGE_JUMP_THRESHOLD,
+    OMEGA_REFINE_TOLERANCE,
+    OMEGA_VERIFY_COUNT,
     OMEGA_ZERO_FIRST_TRANSFER_NK,
     OUTPUT_DAT_DIR,
     OUTPUT_LOG_DIR,
@@ -825,26 +828,112 @@ def run_auto_transfer_search(
             )
 
 
-def binary_search_one_ubmax(
+def _probe_omega(
+    omega_val: float,
+    ubmax_seu: float,
+    diag_stride: int,
+    geometry_mode: str,
+    dat_vs_omega_path: str,
+    log_path: str,
+) -> tuple[bool, str, float, int]:
+    """Run (or reuse) a single simulation at *omega_val* for fixed ubmax_seu.
+
+    Returns (has_transfer, run_dir_name, elapsed_seconds, exit_code).
+    Results are appended to *dat_vs_omega_path* if not already present.
+    """
+    rows = _read_omega_transfer_dat(dat_vs_omega_path)
+    for om, wn in rows:
+        if abs(om - omega_val) < 1e-5:
+            reused = _is_transfer(wn)
+            with open(log_path, "a") as log:
+                log.write(
+                    f"  [reused] OmegaR={omega_val:.4f} -> "
+                    f"{'TRANSFER' if reused else 'NO TRANSFER'}\n"
+                )
+                log.flush()
+            return (reused, "", 0.0, 0)
+
+    run_dir_name, elapsed, exit_code = run_single_1x1(
+        omega=omega_val,
+        ubmax_seu=ubmax_seu,
+        diag_stride=diag_stride,
+        geometry_mode=geometry_mode,
+    )
+    run_dir = os.path.join(SCRIPT_DIR, run_dir_name)
+
+    has_transfer = False
+    if exit_code == 0:
+        has_transfer = check_transfer_for_run(run_dir, run_dir_name)
+
+    already_logged = False
+    if os.path.isfile(dat_vs_omega_path):
+        with open(dat_vs_omega_path, "r") as f:
+            for line in f:
+                if line.startswith("#"):
+                    continue
+                parts = line.split()
+                if len(parts) >= 2 and abs(float(parts[0]) - omega_val) < 1e-5:
+                    already_logged = True
+                    break
+
+    if not already_logged:
+        with open(dat_vs_omega_path, "a") as f:
+            f.write(f"{omega_val:.4f} {1 if has_transfer else 0}\n")
+
+    with open(log_path, "a") as log:
+        log.write(
+            f"  {run_dir_name} (OmegaR={omega_val:.4f}): {elapsed:.2f}s, "
+            f"exit={exit_code}, transfer={'YES' if has_transfer else 'NO'}\n"
+        )
+        log.flush()
+
+    return (has_transfer, run_dir_name, elapsed, exit_code)
+
+
+def verified_search_one_ubmax(
     ubmax_seu: float,
     prev_critical_omega: float | None,
     omega_max: float,
+    omega_step: float,
+    verify_count: int,
     diag_stride: int,
     log_path: str,
     output_dat_dir: str,
 ) -> float:
-    OMEGA_STEP = 0.01
-    left = prev_critical_omega if prev_critical_omega is not None else 0.0
-    left = round(round(left / OMEGA_STEP) * OMEGA_STEP, 2)
+    """Find the first omega where transfer occurs and *stays* (consecutive verification).
+
+    Forward-scans from prev_critical_omega in *omega_step* increments.  When a
+    transfer is found at a candidate omega, it must be followed by
+    (verify_count - 1) additional consecutive transfers (same spacing) to be
+    accepted.  Any gap resets the counter, rejecting isolated
+    dynamical-resonance spikes.
+
+    Optimization A: if the candidate omega is >= prev_critical_omega +
+    OMEGA_LARGE_JUMP_THRESHOLD, skip verification (large jumps are extremely
+    unlikely to be spikes).
+
+    The *omega_step* parameter is the user-configured probe spacing (e.g. 0.01),
+    passed from the main menu; this is separate from the Ubmax step used in the
+    sweep.
+    """
+    if prev_critical_omega is not None and prev_critical_omega > 0:
+        start_omega = prev_critical_omega + omega_step
+    elif prev_critical_omega is not None:
+        start_omega = prev_critical_omega
+    else:
+        start_omega = 0.0
+    start_omega = round(round(start_omega / omega_step) * omega_step, 4)
+
+    geometry_mode = _geom_mode()
 
     with open(log_path, "a") as log:
         log.write(
             f"Run started at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())} "
-            f"(AUTO OMEGA search, Ubmax={ubmax_seu:.4f}, start_scan_from={left:.2f})\n"
+            f"(VERIFIED OMEGA search, Ubmax={ubmax_seu:.4f}, "
+            f"scan_from={start_omega:.4f} (prev_crit={prev_critical_omega}), "
+            f"verify_count={verify_count})\n"
         )
         log.flush()
-
-    geometry_mode = _geom_mode()
 
     build_transfer_dat_for_ubmax(f"{ubmax_seu:.4f}", output_dat_dir)
 
@@ -855,134 +944,176 @@ def binary_search_one_ubmax(
         with open(dat_vs_omega_path, "w") as f:
             f.write("# Omega Transfer(0/1)\n")
 
-    def run_probe_fixed_ubmax(omega_val: float) -> tuple[bool, str, float, int]:
-        run_dir_name, elapsed, exit_code = run_single_1x1(
-            omega=omega_val,
-            ubmax_seu=ubmax_seu,
-            diag_stride=diag_stride,
-            geometry_mode=geometry_mode,
-        )
-        run_dir = os.path.join(SCRIPT_DIR, run_dir_name)
-
-        has_transfer = False
-        if exit_code == 0:
-            has_transfer = check_transfer_for_run(run_dir, run_dir_name)
-
-        run_result = (has_transfer, run_dir_name, elapsed, exit_code)
-
-        already_logged = False
-        if os.path.isfile(dat_vs_omega_path):
-            with open(dat_vs_omega_path, "r") as f:
-                for line in f:
-                    if line.startswith("#"):
-                        continue
-                    parts = line.split()
-                    if len(parts) >= 2 and abs(float(parts[0]) - omega_val) < 1e-5:
-                        already_logged = True
-                        break
-
-        if not already_logged:
-            with open(dat_vs_omega_path, "a") as f:
-                f.write(f"{omega_val:.4f} {1 if has_transfer else 0}\n")
-
-        return run_result
-
+    candidate: float | None = None
+    consecutive = 0
+    omega = start_omega
     iteration = 0
-    while True:
+
+    while omega <= omega_max + 1e-9:
         iteration += 1
         if iteration > BINARY_SEARCH_MAX_ITER:
-            print(
-                f"  Warning: Ubmax={ubmax_seu:.4f} - max iterations ({BINARY_SEARCH_MAX_ITER}) reached"
-            )
             with open(log_path, "a") as log:
-                log.write("  [bootstrap] max iterations reached, breaking\n")
+                log.write(
+                    f"  [verified] max iterations ({BINARY_SEARCH_MAX_ITER}) reached at omega={omega:.4f}\n"
+                )
                 log.flush()
             break
 
-        rows = _read_omega_transfer_dat(dat_vs_omega_path)
-        no_transfer_omegas = [om for om, wn in rows if not _is_transfer(wn)]
-        transfer_omegas = [om for om, wn in rows if _is_transfer(wn)]
+        omega_rounded = round(omega, 4)
 
-        bracket: tuple[float, float] | None = None
-        if no_transfer_omegas and transfer_omegas:
-            first_transfer = min(transfer_omegas)
-            below = [om for om in no_transfer_omegas if om < first_transfer]
-            if below:
-                bracket = (max(below), first_transfer)
+        has_transfer, run_dir_name, elapsed, exit_code = _probe_omega(
+            omega_rounded, ubmax_seu, diag_stride, geometry_mode,
+            dat_vs_omega_path, log_path,
+        )
 
-        if bracket is not None:
-            left, right = bracket
-            if right - left <= OMEGA_STEP:
-                break
-            probe = round((left + right) / 2.0, 2)
-            probe = round(round(probe / OMEGA_STEP) * OMEGA_STEP, 2)
-        else:
-            if not rows:
-                probe = left
-            elif transfer_omegas and not no_transfer_omegas:
-                probe = max(0.0, round(min(transfer_omegas) - OMEGA_STEP, 2))
+        if exit_code != 0 and run_dir_name:
+            with open(log_path, "a") as log:
+                log.write(
+                    f"  [verified] simulation failed at omega={omega_rounded:.4f}, "
+                    f"exit={exit_code}, skipping\n"
+                )
+                log.flush()
+            omega += OMEGA_STEP
+            continue
+
+        if has_transfer:
+            if candidate is None:
+                candidate = omega_rounded
+                consecutive = 1
             else:
-                probe = round(max(no_transfer_omegas) + OMEGA_STEP, 2)
+                consecutive += 1
 
-        if probe > omega_max:
-            probe = omega_max
-
-        existing = None
-        for om, wn in rows:
-            if abs(om - probe) < 1e-5:
-                existing = _is_transfer(wn)
+            large_jump = (
+                prev_critical_omega is not None
+                and candidate >= prev_critical_omega + OMEGA_LARGE_JUMP_THRESHOLD
+            )
+            if large_jump:
+                with open(log_path, "a") as log:
+                    log.write(
+                        f"  [verified] large jump: candidate={candidate:.4f} >= "
+                        f"prev_crit+{OMEGA_LARGE_JUMP_THRESHOLD} "
+                        f"({prev_critical_omega:.4f}+{OMEGA_LARGE_JUMP_THRESHOLD}), "
+                        f"accepting without full verification\n"
+                    )
+                    log.flush()
                 break
 
-        if existing is None:
-            has_transfer, run_dir_name, elapsed, exit_code = run_probe_fixed_ubmax(
-                probe
-            )
-            with open(log_path, "a") as log:
-                log.write(
-                    f"  {run_dir_name} (OmegaR={probe:.4f}): {elapsed:.2f}s, exit_code={exit_code}\n"
-                )
-                log.flush()
-            if exit_code != 0:
+            if consecutive >= verify_count:
+                with open(log_path, "a") as log:
+                    log.write(
+                        f"  [verified] {consecutive} consecutive transfers from "
+                        f"omega={candidate:.4f}, VERIFIED\n"
+                    )
+                    log.flush()
                 break
         else:
-            has_transfer = existing
-            with open(log_path, "a") as log:
-                log.write(
-                    f"  [reused] OmegaR={probe:.4f} from existing dat -> "
-                    f"{'TRANSFER' if has_transfer else 'NO TRANSFER'}\n"
+            if candidate is not None:
+                with open(log_path, "a") as log:
+                    log.write(
+                        f"  [verified] spike rejected: candidate={candidate:.4f} "
+                        f"lost transfer at omega={omega_rounded:.4f} "
+                        f"(had {consecutive} consecutive)\n"
+                    )
+                    log.flush()
+                print(
+                    f"  No transfer at Omega_R={omega_rounded:.4f} "
+                    f"(rejecting spike at {candidate:.4f}, increasing omega)..."
                 )
-                log.flush()
+            candidate = None
+            consecutive = 0
 
-        rows = _read_omega_transfer_dat(dat_vs_omega_path)
-        no_transfer_omegas = [om for om, wn in rows if not _is_transfer(wn)]
-        transfer_omegas = [om for om, wn in rows if _is_transfer(wn)]
+            if prev_critical_omega is None or omega_rounded > prev_critical_omega:
+                with open(log_path, "a") as log:
+                    log.write(
+                        f"  [verified] no transfer at omega={omega_rounded:.4f}, "
+                        f"increasing omega\n"
+                    )
+                    log.flush()
+                if candidate is None:
+                    print(
+                        f"  No transfer at Omega_R={omega_rounded:.4f}, "
+                        "increasing omega..."
+                    )
 
-        if no_transfer_omegas and transfer_omegas:
-            first_transfer = min(transfer_omegas)
-            below = [om for om in no_transfer_omegas if om < first_transfer]
-            if below:
-                left = max(below)
-                right = first_transfer
-                if right - left <= OMEGA_STEP:
-                    break
-        elif probe >= omega_max and not transfer_omegas:
-            break
+        omega += omega_step
 
-    rows = _read_omega_transfer_dat(dat_vs_omega_path)
-    no_transfer_omegas = [om for om, wn in rows if not _is_transfer(wn)]
-    transfer_omegas = [om for om, wn in rows if _is_transfer(wn)]
-
-    if transfer_omegas:
-        first_transfer = min(transfer_omegas)
-        below = [om for om in no_transfer_omegas if om < first_transfer]
-        critical = first_transfer if below else first_transfer
+    if candidate is not None:
+        critical = candidate
     else:
         critical = omega_max
 
     with open(log_path, "a") as log:
-        log.write(f"  Final critical omega estimate: {critical:.4f}\n")
+        log.write(
+            f"  Verified critical omega: {critical:.4f} "
+            f"(consecutive={consecutive})\n"
+        )
         log.flush()
+
     return critical
+
+
+def _binary_refine_omega(
+    ubmax_seu: float,
+    omega_low: float,
+    omega_high: float,
+    diag_stride: int,
+    log_path: str,
+    output_dat_dir: str,
+) -> float:
+    """Binary search within [omega_low, omega_high] for the exact transition.
+
+    Used by the injectivity guard when the coarse 0.01-step search returns the
+    same critical omega as the previous Ubmax.  Refines to
+    OMEGA_REFINE_TOLERANCE resolution.
+    """
+    geometry_mode = _geom_mode()
+    dat_vs_omega_path = _transfer_vs_omega_dat_path(
+        output_dat_dir, ubmax_seu, geometry_mode
+    )
+
+    with open(log_path, "a") as log:
+        log.write(
+            f"  [refine] binary refinement in [{omega_low:.4f}, {omega_high:.4f}]\n"
+        )
+        log.flush()
+
+    lo = omega_low
+    hi = omega_high
+    iteration = 0
+
+    while hi - lo > OMEGA_REFINE_TOLERANCE:
+        iteration += 1
+        if iteration > 20:
+            break
+
+        mid = round((lo + hi) / 2.0, 4)
+        has_transfer, _, _, exit_code = _probe_omega(
+            mid, ubmax_seu, diag_stride, geometry_mode,
+            dat_vs_omega_path, log_path,
+        )
+
+        if exit_code != 0:
+            with open(log_path, "a") as log:
+                log.write(
+                    f"  [refine] sim failed at {mid:.4f}, nudging up\n"
+                )
+                log.flush()
+            lo = mid
+            continue
+
+        if has_transfer:
+            hi = mid
+        else:
+            lo = mid
+
+    result = round(hi, 4)
+    with open(log_path, "a") as log:
+        log.write(
+            f"  [refine] result={result:.4f} (bracket [{lo:.4f}, {hi:.4f}])\n"
+        )
+        log.flush()
+
+    return result
 
 
 def _load_existing_critical_results(dat_file_path: str) -> dict[float, float]:
@@ -1001,8 +1132,24 @@ def run_auto_omega_search(
     ub_step: float,
     omega_min: float,
     omega_max: float,
+    omega_step: float,
+    verify_count: int,
     diag_stride: int,
 ) -> None:
+    """Sweep Ubmax from ub_start toward ub_end, finding the verified critical
+    omega for each point.
+
+    Enforces:
+      - **Consecutive verification**: rejects isolated dynamical-resonance
+        spikes by requiring *verify_count* consecutive transfer results.
+      - **Monotonicity**: critical omega must be non-decreasing as Ubmax
+        decreases (lower barrier -> higher rotation needed).  If a violation is
+        detected the search restarts from prev_critical_omega.
+      - **Injectivity**: each Ubmax must map to a unique critical omega.  When
+        the coarse 0.01 step gives the same value as the previous Ubmax, a
+        binary refinement within [prev_crit, prev_crit + 0.01] resolves a
+        sub-step distinction.
+    """
     if not _require_real_time_mode("AUTO OMEGA SEARCH"):
         return
 
@@ -1019,13 +1166,17 @@ def run_auto_omega_search(
         ubmax_nk_list.append(round(current, 4))
         current += step
 
-    print(f"\nAUTO OMEGA mode: Ubmax range [{ub_start}, {ub_end}], step {ub_step}")
+    print(f"\nAUTO OMEGA mode (verified): Ubmax range [{ub_start}, {ub_end}], step {ub_step}")
     print(
         f"  Ubmax values: {ubmax_nk_list[:10]}{'...' if len(ubmax_nk_list) > 10 else ''} "
         f"({len(ubmax_nk_list)} total)"
     )
     print(f"  diag_stride={diag_stride}")
     print(f"  geometry={geometry_mode}")
+    print(
+        f"  verify_count={verify_count}, "
+        f"refine_tol={OMEGA_REFINE_TOLERANCE}, probe_step={omega_step}"
+    )
 
     os.makedirs(OUTPUT_LOG_DIR, exist_ok=True)
     os.makedirs(OUTPUT_DAT_DIR, exist_ok=True)
@@ -1052,25 +1203,91 @@ def run_auto_omega_search(
 
         with open(log_path, "a") as log:
             log.write(
-                f"\nSearch for Ubmax={ubmax_nk:.4f} nK (SEU={ubmax_seu:.2f}, geometry={geometry_mode})\n"
+                f"\nSearch for Ubmax={ubmax_nk:.4f} nK "
+                f"(SEU={ubmax_seu:.2f}, geometry={geometry_mode})\n"
             )
 
         print(
-            f"\n  Binary search for Ubmax={ubmax_nk:.4f} nK (SEU={ubmax_seu:.2f}) "
-            f"[Prev Critical Omega={prev_critical_omega}, geometry={geometry_mode}]"
+            f"\n  Verified search for Ubmax={ubmax_nk:.4f} nK (SEU={ubmax_seu:.2f}) "
+            f"[prev_crit_omega={prev_critical_omega:.4f}, geometry={geometry_mode}]"
         )
 
         search_start = time.time()
-        crit_omega = binary_search_one_ubmax(
+        crit_omega = verified_search_one_ubmax(
             ubmax_seu,
             prev_critical_omega,
             omega_max,
+            omega_step,
+            verify_count,
             diag_stride,
             log_path,
             OUTPUT_DAT_DIR,
         )
         elapsed = time.time() - search_start
         elapsed_min = elapsed / 60.0
+
+        # --- Monotonicity guard ---
+        if crit_omega < prev_critical_omega:
+            with open(log_path, "a") as log:
+                log.write(
+                    f"  [monotonicity] violation: {crit_omega:.4f} < "
+                    f"prev={prev_critical_omega:.4f}, re-searching from prev\n"
+                )
+                log.flush()
+            print(
+                f"  [monotonicity] {crit_omega:.4f} < prev {prev_critical_omega:.4f}, "
+                f"re-searching from prev_critical_omega"
+            )
+            crit_omega = verified_search_one_ubmax(
+                ubmax_seu,
+                prev_critical_omega,
+                omega_max,
+                omega_step,
+                verify_count,
+                diag_stride,
+                log_path,
+                OUTPUT_DAT_DIR,
+            )
+            extra_elapsed = time.time() - search_start - elapsed
+            elapsed = time.time() - search_start
+            elapsed_min = elapsed / 60.0
+            if crit_omega < prev_critical_omega:
+                crit_omega = prev_critical_omega
+                with open(log_path, "a") as log:
+                    log.write(
+                        f"  [monotonicity] still violated after retry, "
+                        f"clamping to {prev_critical_omega:.4f}\n"
+                    )
+                    log.flush()
+
+        # --- Injectivity guard ---
+        if (
+            abs(crit_omega - prev_critical_omega) < 1e-5
+            and prev_critical_omega > 0
+        ):
+            with open(log_path, "a") as log:
+                log.write(
+                    f"  [injectivity] coarse crit_omega={crit_omega:.4f} == "
+                    f"prev={prev_critical_omega:.4f}, refining\n"
+                )
+                log.flush()
+            refined = _binary_refine_omega(
+                ubmax_seu,
+                prev_critical_omega,
+                prev_critical_omega + omega_step,
+                diag_stride,
+                log_path,
+                OUTPUT_DAT_DIR,
+            )
+            if refined > prev_critical_omega:
+                crit_omega = refined
+                with open(log_path, "a") as log:
+                    log.write(
+                        f"  [injectivity] refined to {crit_omega:.4f}\n"
+                    )
+                    log.flush()
+            elapsed = time.time() - search_start
+            elapsed_min = elapsed / 60.0
 
         _ensure_critical_omega_cached(dat_file_path, ubmax_nk, ubmax_seu, crit_omega)
         existing_results[round(ubmax_nk, 4)] = crit_omega
@@ -1086,7 +1303,8 @@ def run_auto_omega_search(
         _generate_critical_omega_summary_png(OUTPUT_DAT_DIR, OUTPUT_PNG_DIR)
 
         print(
-            f"  Found Critical Omega={crit_omega:.2f}  ({elapsed_min:.1f} min / {elapsed:.0f} s)"
+            f"  Verified Critical Omega={crit_omega:.4f}  "
+            f"({elapsed_min:.1f} min / {elapsed:.0f} s)"
         )
 
         with open(log_path, "a") as log:
@@ -1158,13 +1376,27 @@ def prompt_and_run_auto_omega_search() -> None:
     if not _require_real_time_mode("AUTO OMEGA SEARCH"):
         return
     print("=" * 60)
-    print("AUTO OMEGA SEARCH - Binary search for critical Omega per Ubmax")
+    print("AUTO OMEGA SEARCH - Verified search for critical Omega per Ubmax")
+    print(
+        f"  (default consecutive verification={OMEGA_VERIFY_COUNT}, "
+        f"refine tolerance={OMEGA_REFINE_TOLERANCE})"
+    )
     print("=" * 60)
     ub_start = float(
         input("Enter Ubmax start (high nK, e.g., 48.5): ").strip() or "48.5"
     )
     ub_end = float(input("Enter Ubmax end (low nK, e.g., 40.0): ").strip() or "40.0")
     ub_step = float(input("Enter Ubmax step size (nK, e.g., 0.5): ").strip() or "0.5")
+
+    omega_step = float(
+        input("Enter omega probe step (rad/s, e.g., 0.01): ").strip() or "0.01"
+    )
+
+    verify_str = input(
+        "Enter total probe count per candidate (including the candidate itself) "
+        f"[{OMEGA_VERIFY_COUNT}]: "
+    ).strip() or str(OMEGA_VERIFY_COUNT)
+    verify_count = int(verify_str)
 
     om_min = 0.0
     om_max = 7.0
@@ -1175,6 +1407,8 @@ def prompt_and_run_auto_omega_search() -> None:
     print("\n--- Configuration ---")
     print(f"  Ubmax: {ub_start} to {ub_end} nK, step {ub_step}")
     print(f"  Omega Search Window: [{om_min}, {om_max}] (Dynamic Lower Bound)")
+    print(f"  Omega probe step: {omega_step}")
+    print(f"  Total probes per candidate: {verify_count}")
     print(f"  diag_stride: {diag_stride}")
 
     confirm = input("\nProceed? (y/n): ").strip().lower()
@@ -1182,7 +1416,16 @@ def prompt_and_run_auto_omega_search() -> None:
         print("Aborted.")
         return
 
-    run_auto_omega_search(ub_start, ub_end, ub_step, om_min, om_max, diag_stride)
+    run_auto_omega_search(
+        ub_start,
+        ub_end,
+        ub_step,
+        om_min,
+        om_max,
+        omega_step,
+        verify_count,
+        diag_stride,
+    )
 
 
 def _read_omega_transfer_dat(dat_path: str) -> list[tuple[float, float]]:
