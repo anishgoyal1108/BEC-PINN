@@ -25,7 +25,9 @@ def _toggle_sweep_mode_with_message() -> None:
     if new_mode == "omega":
         print("\n  Sweep mode changed to: OMEGA (sweep over omega, fixed Ubmax)")
     else:
-        print("\n  Sweep mode changed to: UBMAX (sweep over Ubmax/temperature, fixed omega)")
+        print(
+            "\n  Sweep mode changed to: UBMAX (sweep over Ubmax/temperature, fixed omega)"
+        )
 
 
 def _toggle_geometry_mode_with_message() -> None:

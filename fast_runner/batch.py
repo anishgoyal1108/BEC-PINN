@@ -1,4 +1,3 @@
-# batch.py
 import os
 import re
 import shutil
@@ -115,7 +114,9 @@ def run_simulation(
 
             final_wf_imag = os.path.join(imag_folder, "final_wf.dat")
             final_wf_parent = os.path.join(run_dir, "final_wf.dat")
-            final_wf_src = final_wf_imag if os.path.isfile(final_wf_imag) else final_wf_parent
+            final_wf_src = (
+                final_wf_imag if os.path.isfile(final_wf_imag) else final_wf_parent
+            )
             if os.path.isfile(final_wf_src):
                 shutil.copy2(final_wf_src, os.path.join(run_dir, "initial_wf.dat"))
 
@@ -134,7 +135,9 @@ def run_simulation(
                     final_wf = final_wf_parent
 
                 if final_wf:
-                    os.makedirs(get_omega_cache_dir("1x1", get_geometry_mode()), exist_ok=True)
+                    os.makedirs(
+                        get_omega_cache_dir("1x1", get_geometry_mode()), exist_ok=True
+                    )
                     if not os.path.isfile(cache_path):
                         shutil.copy2(final_wf, cache_path)
                         print(
@@ -150,7 +153,9 @@ def run_simulation(
                             f"  {run_dir_name}: Solver did not write final_wf.dat (imag-only run); ground state not cached"
                         )
                     else:
-                        print(f"  {run_dir_name}: WARNING - Could not find final_wf.dat to cache")
+                        print(
+                            f"  {run_dir_name}: WARNING - Could not find final_wf.dat to cache"
+                        )
             else:
                 print(
                     f"  {run_dir_name}: WARNING - Could not extract omega value from directory name for caching"
@@ -181,7 +186,11 @@ def run_simulation(
             if os.path.exists(os.path.join(run_dir, "sim_folder")):
                 shutil.move(os.path.join(run_dir, "sim_folder"), real_folder)
 
-        for tmp_file in ["di_modified.dat", "gi_imag_modified.dat", "gi_real_modified.dat"]:
+        for tmp_file in [
+            "di_modified.dat",
+            "gi_imag_modified.dat",
+            "gi_real_modified.dat",
+        ]:
             tmp_path = os.path.join(run_dir, tmp_file)
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
@@ -204,7 +213,9 @@ def prompt_batch_inputs_ubmax_sweep():
 
     omega = float(input("Enter omega_rf value (e.g., 0.23): "))
     t_start = float(input("Enter temperature T start value (in nK, e.g., 40.0): "))
-    t_end = float(input("Enter temperature T end value (inclusive, in nK, e.g., 50.0): "))
+    t_end = float(
+        input("Enter temperature T end value (inclusive, in nK, e.g., 50.0): ")
+    )
     num_runs = int(input("Enter number of temperature values (e.g., 6): "))
     diag_stride = int(
         input("Enter diag_stride (diagnostics every N steps, 0=skip, e.g., 10): ")
@@ -346,7 +357,9 @@ def run_batch():
             geometry_mode=geometry_mode,
         )
         if cached_ground_state:
-            print(f"  Will skip imaginary time for remaining {len(run_dirs) - 1} runs.\n")
+            print(
+                f"  Will skip imaginary time for remaining {len(run_dirs) - 1} runs.\n"
+            )
 
     print(f"\nCreated {len(run_dirs)} run directories. Starting simulations...\n")
 

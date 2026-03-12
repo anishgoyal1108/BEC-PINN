@@ -54,7 +54,9 @@ def _estimate_density_cmax(
     return float(np.percentile(values, percentile))
 
 
-def _build_movie_gnu_script(kind: str, start: int, end: int, cmax: float | None = None) -> str:
+def _build_movie_gnu_script(
+    kind: str, start: int, end: int, cmax: float | None = None
+) -> str:
     header = (
         "set key off\n"
         "set pm3d\n"
@@ -384,7 +386,9 @@ def create_movies(folder: str, phase: str):
     n_workers = min(NUM_FRAME_WORKERS, num_frames)
     chunks = _chunk_range(lo, hi, n_workers)
 
-    print(f"  Creating density and phase frames ({len(chunks)} workers each, {lo}-{hi})...")
+    print(
+        f"  Creating density and phase frames ({len(chunks)} workers each, {lo}-{hi})..."
+    )
     tasks = []
     for start, end in chunks:
         tasks.append(("density_distribution_movie.gnu", start, end))
@@ -437,10 +441,14 @@ def create_density_phase_frames(
     tasks = []
     for frame_num in frame_numbers:
         density_output_name = f"{run_dir_name}_real_{frame_num:03d}.png"
-        tasks.append(("density", density_gnu, frame_num, density_output_dir, density_output_name))
+        tasks.append(
+            ("density", density_gnu, frame_num, density_output_dir, density_output_name)
+        )
 
         phase_output_name = f"{run_dir_name}_real_{frame_num:03d}.png"
-        tasks.append(("phase", phase_gnu, frame_num, phase_output_dir, phase_output_name))
+        tasks.append(
+            ("phase", phase_gnu, frame_num, phase_output_dir, phase_output_name)
+        )
 
     density_paths = []
     phase_paths = []
@@ -478,19 +486,25 @@ def create_density_phase_frames(
                     phase_paths.append(output_path)
                     phase_count += 1
 
-    print(f"  Created {density_count} density frame(s) and {phase_count} phase frame(s)")
+    print(
+        f"  Created {density_count} density frame(s) and {phase_count} phase frame(s)"
+    )
 
     if combine_gif and density_paths and phase_paths:
         print("  Combining frames into GIFs...")
         density_paths_sorted = sorted(density_paths)
         phase_paths_sorted = sorted(phase_paths)
 
-        density_gif = os.path.join(density_output_dir, f"{run_dir_name}_real_density.gif")
+        density_gif = os.path.join(
+            density_output_dir, f"{run_dir_name}_real_density.gif"
+        )
         phase_gif = os.path.join(phase_output_dir, f"{run_dir_name}_real_phase.gif")
 
         if density_paths_sorted:
             result = subprocess.run(
-                ["magick", "-delay", "10", "-loop", "0"] + density_paths_sorted + [density_gif],
+                ["magick", "-delay", "10", "-loop", "0"]
+                + density_paths_sorted
+                + [density_gif],
                 cwd=density_output_dir,
                 capture_output=True,
             )
@@ -500,7 +514,9 @@ def create_density_phase_frames(
 
         if phase_paths_sorted:
             result = subprocess.run(
-                ["magick", "-delay", "10", "-loop", "0"] + phase_paths_sorted + [phase_gif],
+                ["magick", "-delay", "10", "-loop", "0"]
+                + phase_paths_sorted
+                + [phase_gif],
                 cwd=phase_output_dir,
                 capture_output=True,
             )
@@ -569,7 +585,9 @@ def create_density_phase_frames_batch(
     run_density_paths = {}
     run_phase_paths = {}
 
-    print(f"  Processing {len(tasks)} frame(s) in parallel ({NUM_FRAME_WORKERS} workers)...")
+    print(
+        f"  Processing {len(tasks)} frame(s) in parallel ({NUM_FRAME_WORKERS} workers)..."
+    )
 
     with ProcessPoolExecutor(max_workers=NUM_FRAME_WORKERS) as executor:
         futures = [
@@ -610,12 +628,18 @@ def create_density_phase_frames_batch(
             if success and os.path.isfile(output_path):
                 if frame_type == "density":
                     total_density += 1
-                    run_density_paths.setdefault(run_dir_name, []).append((output_path, frame_num))
+                    run_density_paths.setdefault(run_dir_name, []).append(
+                        (output_path, frame_num)
+                    )
                 else:
                     total_phase += 1
-                    run_phase_paths.setdefault(run_dir_name, []).append((output_path, frame_num))
+                    run_phase_paths.setdefault(run_dir_name, []).append(
+                        (output_path, frame_num)
+                    )
 
-    print(f"  Created {total_density} density frame(s) and {total_phase} phase frame(s)")
+    print(
+        f"  Created {total_density} density frame(s) and {total_phase} phase frame(s)"
+    )
 
     if combine_gif:
         for run_dir_name in set(run_density_paths) | set(run_phase_paths):
@@ -626,16 +650,24 @@ def create_density_phase_frames_batch(
             density_paths_sorted = [p for p, _ in density_list]
             phase_paths_sorted = [p for p, _ in phase_list]
             if density_paths_sorted:
-                density_gif = os.path.join(density_output_dir, f"{run_dir_name}_real_density.gif")
+                density_gif = os.path.join(
+                    density_output_dir, f"{run_dir_name}_real_density.gif"
+                )
                 subprocess.run(
-                    ["magick", "-delay", "10", "-loop", "0"] + density_paths_sorted + [density_gif],
+                    ["magick", "-delay", "10", "-loop", "0"]
+                    + density_paths_sorted
+                    + [density_gif],
                     cwd=density_output_dir,
                     capture_output=True,
                 )
             if phase_paths_sorted:
-                phase_gif = os.path.join(phase_output_dir, f"{run_dir_name}_real_phase.gif")
+                phase_gif = os.path.join(
+                    phase_output_dir, f"{run_dir_name}_real_phase.gif"
+                )
                 subprocess.run(
-                    ["magick", "-delay", "10", "-loop", "0"] + phase_paths_sorted + [phase_gif],
+                    ["magick", "-delay", "10", "-loop", "0"]
+                    + phase_paths_sorted
+                    + [phase_gif],
                     cwd=phase_output_dir,
                     capture_output=True,
                 )
@@ -644,7 +676,9 @@ def create_density_phase_frames_batch(
 
 
 def _select_single_run(runs_grouped: dict) -> dict | None:
-    group_list, group_label, secondary_label, group_options = build_group_options(runs_grouped)
+    group_list, group_label, secondary_label, group_options = build_group_options(
+        runs_grouped
+    )
     print(f"\nFound {len(group_list)} {group_label} values (fixed parameter):\n")
     group_choice = select_from_menu(group_options, f"\nSelect {group_label}: ")
     if group_choice == 0:
@@ -654,7 +688,9 @@ def _select_single_run(runs_grouped: dict) -> dict | None:
     runs = runs_grouped[selected_group]
 
     secondary_options = build_secondary_options(selected_group, runs)
-    secondary_choice = select_from_menu(secondary_options, f"\nSelect {secondary_label}: ")
+    secondary_choice = select_from_menu(
+        secondary_options, f"\nSelect {secondary_label}: "
+    )
     if secondary_choice == 0:
         return None
 
@@ -705,8 +741,12 @@ def run_movie_creator():
     real_folder = find_sim_folder(run_dir, run_dir_name, "real")
 
     print("\nAvailable simulation phases:")
-    print(f"  [{'✓' if imag_folder else '✗'}] Imaginary time folder {'found' if imag_folder else 'NOT found'}")
-    print(f"  [{'✓' if real_folder else '✗'}] Real time folder {'found' if real_folder else 'NOT found'}")
+    print(
+        f"  [{'✓' if imag_folder else '✗'}] Imaginary time folder {'found' if imag_folder else 'NOT found'}"
+    )
+    print(
+        f"  [{'✓' if real_folder else '✗'}] Real time folder {'found' if real_folder else 'NOT found'}"
+    )
 
     if not imag_folder and not real_folder:
         print("\nNo simulation folders found!")
@@ -819,7 +859,9 @@ def run_movie_viewer():
         if movies_status[movie_type]:
             movies_to_open.append(movie_path)
         else:
-            print(f"\n  {phase.upper()} {movie_type} movie doesn't exist in {os.path.basename(folder)}")
+            print(
+                f"\n  {phase.upper()} {movie_type} movie doesn't exist in {os.path.basename(folder)}"
+            )
             create = input("  Create it now? (y/n): ").strip().lower()
             if create == "y":
                 create_movies(folder, phase)
@@ -854,7 +896,9 @@ def run_movie_viewer():
 
     if movies_to_open:
         viewer, opened = open_files_in_viewer(movies_to_open)
-        print(f"\n  Opening {len(movies_to_open)} movie(s) with {viewer} (separate windows)...")
+        print(
+            f"\n  Opening {len(movies_to_open)} movie(s) with {viewer} (separate windows)..."
+        )
         if opened < len(movies_to_open):
             print(f"  Warning: opened {opened}/{len(movies_to_open)} file(s).")
     else:
@@ -885,12 +929,16 @@ def run_mass_density_phase_creator():
     first_real_folder = find_sim_folder(first_run_dir, first_run_dir_name, "real")
 
     if first_real_folder is None:
-        print(f"\nNo real folder found for {first_run_dir_name}. Cannot determine frame range.")
+        print(
+            f"\nNo real folder found for {first_run_dir_name}. Cannot determine frame range."
+        )
         return
 
     available_range = _get_frame_range(first_real_folder)
     if available_range is None:
-        print(f"\nNo wf_ascii_*.dat files found in {os.path.basename(first_real_folder)}.")
+        print(
+            f"\nNo wf_ascii_*.dat files found in {os.path.basename(first_real_folder)}."
+        )
         return
 
     min_frame, max_frame = available_range
@@ -908,7 +956,9 @@ def run_mass_density_phase_creator():
             print("No valid frames specified.")
             return
 
-    print(f"\nWill process {len(frame_numbers)} frame(s): {frame_numbers[:10]}{'...' if len(frame_numbers) > 10 else ''}")
+    print(
+        f"\nWill process {len(frame_numbers)} frame(s): {frame_numbers[:10]}{'...' if len(frame_numbers) > 10 else ''}"
+    )
 
     print("\nGenerate images:")
     print("  1. Density only")
@@ -922,7 +972,9 @@ def run_mass_density_phase_creator():
     else:
         image_type = "both"
 
-    combine_gif_input = input("\nCombine frames into GIFs? (y/n, default=n): ").strip().lower()
+    combine_gif_input = (
+        input("\nCombine frames into GIFs? (y/n, default=n): ").strip().lower()
+    )
     combine_gif = combine_gif_input == "y"
 
     runs_data = []
@@ -960,7 +1012,9 @@ def run_mass_density_phase_creator():
     total_phase = result["phase_count"]
 
     print(f"\n{'='*60}")
-    print(f"Complete! Created {total_density} density frame(s) and {total_phase} phase frame(s)")
+    print(
+        f"Complete! Created {total_density} density frame(s) and {total_phase} phase frame(s)"
+    )
     print(f"Output directory: {OUTPUT_PNG_DIR}")
     print(f"  Density frames: {get_density_frames_dir()}")
     print(f"  Phase frames:   {get_phase_frames_dir()}")

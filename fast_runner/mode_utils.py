@@ -18,5 +18,7 @@ def cleanup_real_time_artifacts(run_dir: str, run_dir_name: str) -> None:
 
     sim_folder = os.path.join(run_dir, "sim_folder")
     if os.path.exists(sim_folder):
-        print(f"  {run_dir_name}: WARNING - Found sim_folder, removing it (imag-only mode)")
+        print(
+            f"  {run_dir_name}: WARNING - Found sim_folder, removing it (imag-only mode)"
+        )
         shutil.rmtree(sim_folder)

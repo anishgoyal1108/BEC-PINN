@@ -76,7 +76,9 @@ def parse_critical_omega_data() -> list[CriticalRow]:
     return rows
 
 
-def _pick_nearest_unique(rows: list[CriticalRow], center_nk: float, used: set[float]) -> float:
+def _pick_nearest_unique(
+    rows: list[CriticalRow], center_nk: float, used: set[float]
+) -> float:
     ordered = sorted(rows, key=lambda r: abs(r.ub_nk - center_nk))
     for row in ordered:
         if row.ub_nk not in used:
@@ -85,7 +87,9 @@ def _pick_nearest_unique(rows: list[CriticalRow], center_nk: float, used: set[fl
     return ordered[0].ub_nk
 
 
-def classify_and_select_ubmax_values(omega_r: float, experiment_k: int) -> ExperimentSelection:
+def classify_and_select_ubmax_values(
+    omega_r: float, experiment_k: int
+) -> ExperimentSelection:
     all_rows = parse_critical_omega_data()
     if not all_rows:
         raise ValueError("No rows found in critical_omega_vs_ubmax data file.")
@@ -104,8 +108,12 @@ def classify_and_select_ubmax_values(omega_r: float, experiment_k: int) -> Exper
 
     transfer_margin = 0.03
     no_transfer_margin = 0.03
-    strong_transfer = [r for r in transfer_capable if r.critical_omega <= omega_r - transfer_margin]
-    strong_no_transfer = [r for r in no_transfer if r.critical_omega >= omega_r + no_transfer_margin]
+    strong_transfer = [
+        r for r in transfer_capable if r.critical_omega <= omega_r - transfer_margin
+    ]
+    strong_no_transfer = [
+        r for r in no_transfer if r.critical_omega >= omega_r + no_transfer_margin
+    ]
 
     tc_sorted = sorted(strong_transfer or transfer_capable, key=lambda r: r.ub_nk)
     tc_min = tc_sorted[0].ub_nk
@@ -122,15 +130,21 @@ def classify_and_select_ubmax_values(omega_r: float, experiment_k: int) -> Exper
         key=lambda ub: min(all_rows, key=lambda r: abs(r.ub_nk - ub)).critical_omega,
     )
 
-    no_transfer_row = min(strong_no_transfer or no_transfer, key=lambda r: abs(r.critical_omega - (omega_r + 1)))
+    no_transfer_row = min(
+        strong_no_transfer or no_transfer,
+        key=lambda r: abs(r.critical_omega - (omega_r + 1)),
+    )
     no_transfer_nk = no_transfer_row.ub_nk
 
     ub_nk_by_target: dict[str, float] = {}
     for idx, target in enumerate(TARGET_ORDER):
-        ub_nk_by_target[target] = transfer_bin_nk[idx] if idx < experiment_k else no_transfer_nk
+        ub_nk_by_target[target] = (
+            transfer_bin_nk[idx] if idx < experiment_k else no_transfer_nk
+        )
 
     ub_seu_by_target = {
-        target: ubmax_scaled_from_T_nK(ub_nk_by_target[target]) for target in TARGET_ORDER
+        target: ubmax_scaled_from_T_nK(ub_nk_by_target[target])
+        for target in TARGET_ORDER
     }
     return ExperimentSelection(
         ub_nk_by_target=ub_nk_by_target,
@@ -194,7 +208,10 @@ def _run_phase_with_inputs(
     gi_source_name: str,
     out_suffix: str,
 ) -> int:
-    shutil.copy2(os.path.join(run_dir, "di_modified.dat"), os.path.join(run_dir, "dtap_inputs.dat"))
+    shutil.copy2(
+        os.path.join(run_dir, "di_modified.dat"),
+        os.path.join(run_dir, "dtap_inputs.dat"),
+    )
     shutil.copy2(
         os.path.join(run_dir, gi_source_name),
         os.path.join(run_dir, "rfgpe_2d_solver_general_inputs.dat"),
@@ -241,7 +258,9 @@ def find_or_create_ground_state_2x2(
         "  No cached 2x2 ground state for "
         f"omega={omega:.4f} and current Ub matrix; running imag time..."
     )
-    exit_code = _run_phase_with_inputs(run_dir, run_dir_name, "gi_imag_modified.dat", "imag")
+    exit_code = _run_phase_with_inputs(
+        run_dir, run_dir_name, "gi_imag_modified.dat", "imag"
+    )
     if exit_code != 0:
         print(f"  Error running 2x2 imag phase: exit_code={exit_code}")
         return None
@@ -271,7 +290,9 @@ def _render_density_preview_2x2(run_dir_name: str, real_folder: str) -> str | No
 
     frame_range = _get_frame_range(real_folder)
     if frame_range is None:
-        print("  WARNING: no wf_ascii_*.dat files found; skipping density preview frame")
+        print(
+            "  WARNING: no wf_ascii_*.dat files found; skipping density preview frame"
+        )
         return None
 
     min_frame, max_frame = frame_range
@@ -309,7 +330,7 @@ def _run_single_experiment(
     imag_only_mode = is_imag_only_mode()
 
     ub_ref_seu = sum(selection.ub_seu_by_target.values()) / 4
-    run_dir_name, run_dir = prepare_directory (
+    run_dir_name, run_dir = prepare_directory(
         omega=omega,
         experiment_k=experiment_k,
         ubmax_assignment_seu=selection.ub_seu_by_target,
@@ -330,7 +351,9 @@ def _run_single_experiment(
     if not os.path.isfile(initial_wf_path):
         shutil.copy2(cached_gs, initial_wf_path)
 
-    print_simulation_debug(run_dir_name, imag_only=imag_only_mode, global_imag_only=is_imag_only_mode())
+    print_simulation_debug(
+        run_dir_name, imag_only=imag_only_mode, global_imag_only=is_imag_only_mode()
+    )
     if imag_only_mode:
         print(f"  [k={experiment_k}] Skipping real-time evolution (IMAG_ONLY mode)")
         cleanup_real_time_artifacts(run_dir, run_dir_name)
@@ -367,7 +390,9 @@ def run_2x2_threshold_experiment() -> None:
 
     critical_path = _critical_omega_dat_path()
     if critical_path is None:
-        print(f"\n  ERROR: Critical omega data file not found: {os.path.join(get_mode_cache_dir(), 'critical_omega_vs_ubmax.dat')}")
+        print(
+            f"\n  ERROR: Critical omega data file not found: {os.path.join(get_mode_cache_dir(), 'critical_omega_vs_ubmax.dat')}"
+        )
         return
 
     geometry_mode = get_geometry_mode().lower()
@@ -405,7 +430,9 @@ def run_2x2_threshold_experiment() -> None:
         print("  Invalid diag_stride value.")
         return
 
-    use_custom = input("  Use custom barrier strengths? (y/n, default=n): ").strip().lower()
+    use_custom = (
+        input("  Use custom barrier strengths? (y/n, default=n): ").strip().lower()
+    )
     custom_selection: ExperimentSelection | None = None
     if use_custom == "y":
         custom_nk = _prompt_custom_barrier_strengths()
@@ -420,7 +447,9 @@ def run_2x2_threshold_experiment() -> None:
     else:
         try:
             for experiment_k in selected_experiments:
-                selections_by_k[experiment_k] = classify_and_select_ubmax_values(omega, experiment_k)
+                selections_by_k[experiment_k] = classify_and_select_ubmax_values(
+                    omega, experiment_k
+                )
         except ValueError as e:
             print(f"\n  ERROR: {e}")
             return
@@ -475,13 +504,17 @@ def run_2x2_threshold_experiment() -> None:
                 geometry_mode=geometry_mode,
             )
             write_execution_log_result(log, run_dir_name, elapsed, exit_code)
-            print(f"  Completed: {run_dir_name} ({elapsed:.2f}s, exit_code={exit_code})")
+            print(
+                f"  Completed: {run_dir_name} ({elapsed:.2f}s, exit_code={exit_code})"
+            )
             if exit_code == 0:
                 success_count += 1
 
         total_elapsed = write_execution_log_total_runtime(log, session_start)
 
-    print(f"\n  2x2 experiment session complete: {success_count}/{len(selected_experiments)} succeeded")
+    print(
+        f"\n  2x2 experiment session complete: {success_count}/{len(selected_experiments)} succeeded"
+    )
     print(f"  Total runtime: {total_elapsed:.2f}s")
     print(f"  Log file: {log_path}")
     print(f"  PNG output directory: {OUTPUT_PNG_DIR}")

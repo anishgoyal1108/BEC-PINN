@@ -13,9 +13,7 @@ RUN_DIR_PATTERN = re.compile(
 #   - Older directories may not include the geometry suffix but DO include omega and Ubmax,
 #     with subdirectories containing '_imag' and '_real'.
 #   - Example: om_0.2300_ub_0396.0_wp_1.1250
-LEGACY_RUN_DIR_PATTERN = re.compile(
-    r"^om_([\d.]+)_ub_([\d.]+)_wp_([\d.]+)$"
-)
+LEGACY_RUN_DIR_PATTERN = re.compile(r"^om_([\d.]+)_ub_([\d.]+)_wp_([\d.]+)$")
 
 
 def _scan_runs() -> list[dict]:
@@ -39,7 +37,9 @@ def _scan_runs() -> list[dict]:
                     "geometry": geom,
                     "path": path,
                     "run_kind": "2x2" if experiment_k is not None else "1x1",
-                    "experiment_k": int(experiment_k) if experiment_k is not None else None,
+                    "experiment_k": (
+                        int(experiment_k) if experiment_k is not None else None
+                    ),
                 }
             )
             continue

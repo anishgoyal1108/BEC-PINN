@@ -13,8 +13,6 @@ TEMPLATE_REQUIRED_FILES = (
     "Makefile",
     "run_rfgpe_2d_solver.sh",
     "save_sim.sh",
-    "density_distribution_movie.gnu",
-    "phase_distribution_movie.gnu",
 )
 
 OUTPUT_LOG_DIR = os.path.join(SCRIPT_DIR, "output", "log")
@@ -41,14 +39,18 @@ def _output_geom_suffix(geometry_mode: str | None = None) -> str:
     return (geometry_mode or get_geometry_mode()).lower()
 
 
-def get_transfer_log_path_omega(omega_key: str, geometry_mode: str | None = None) -> str:
+def get_transfer_log_path_omega(
+    omega_key: str, geometry_mode: str | None = None
+) -> str:
     """Path for omega-sweep transfer search log: output/log/om_{key}_geom_{mode}.txt"""
     ensure_output_dirs()
     mode = _output_geom_suffix(geometry_mode)
     return os.path.join(OUTPUT_LOG_DIR, f"om_{omega_key}_geom_{mode}.txt")
 
 
-def get_transfer_log_path_ubmax(ubmax_nk: float, geometry_mode: str | None = None) -> str:
+def get_transfer_log_path_ubmax(
+    ubmax_nk: float, geometry_mode: str | None = None
+) -> str:
     """Path for ubmax-sweep transfer search log: output/log/ub_{ubmax_nk}_geom_{mode}.txt"""
     ensure_output_dirs()
     mode = _output_geom_suffix(geometry_mode)
@@ -77,7 +79,9 @@ def get_phase_frames_dir() -> str:
     return path
 
 
-def get_transfer_summary_png_path_ubmax(omega: float, geometry_mode: str | None = None) -> str:
+def get_transfer_summary_png_path_ubmax(
+    omega: float, geometry_mode: str | None = None
+) -> str:
     """Path for transfer-vs-ubmax summary plot: output/png/transfer_vs_ubmax_omega_{omega}_geom_{mode}.png"""
     ensure_output_dirs()
     mode = _output_geom_suffix(geometry_mode)
@@ -87,7 +91,9 @@ def get_transfer_summary_png_path_ubmax(omega: float, geometry_mode: str | None 
     )
 
 
-def get_transfer_summary_png_path_omega(ubmax_seu: float, geometry_mode: str | None = None) -> str:
+def get_transfer_summary_png_path_omega(
+    ubmax_seu: float, geometry_mode: str | None = None
+) -> str:
     """Path for transfer-vs-omega summary plot: output/png/transfer_vs_omega_ubmax_{ubmax_seu}_geom_{mode}.png"""
     ensure_output_dirs()
     mode = _output_geom_suffix(geometry_mode)
@@ -102,6 +108,7 @@ def get_critical_summary_png_path(geometry_mode: str | None = None) -> str:
     ensure_output_dirs()
     mode = _output_geom_suffix(geometry_mode)
     return os.path.join(OUTPUT_PNG_DIR, f"critical_omega_vs_ubmax_geom_{mode}.png")
+
 
 TOLERANCE_NK = 1.5
 WINDOW_TARGET_NK = 0.1

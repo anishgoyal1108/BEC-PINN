@@ -1,7 +1,12 @@
 import os
 import shutil
 
-from .settings import SCRIPT_DIR, TEMPLATE_DIR, TEMPLATE_REQUIRED_FILES, get_geometry_mode
+from .settings import (
+    SCRIPT_DIR,
+    TEMPLATE_DIR,
+    TEMPLATE_REQUIRED_FILES,
+    get_geometry_mode,
+)
 
 _DI_WD_LINE_INDEX = 25
 _DI_NROWS_LINE_INDEX = 53
@@ -220,7 +225,9 @@ def cleanup_run_directory(run_dir: str) -> None:
             os.remove(path)
 
 
-def _copy_template_support_files(run_dir: str, template_dir: str = TEMPLATE_DIR) -> None:
+def _copy_template_support_files(
+    run_dir: str, template_dir: str = TEMPLATE_DIR
+) -> None:
     skip_names = {"dtap_inputs.dat", "rfgpe_2d_solver_general_inputs.dat"}
     for name in os.listdir(template_dir):
         if name in skip_names:
@@ -257,7 +264,9 @@ def _load_template_inputs(template_dir: str = TEMPLATE_DIR) -> tuple[str, str]:
     validate_template_dir(template_dir)
     with open(os.path.join(template_dir, "dtap_inputs.dat"), "r") as f:
         di_template = f.read()
-    with open(os.path.join(template_dir, "rfgpe_2d_solver_general_inputs.dat"), "r") as f:
+    with open(
+        os.path.join(template_dir, "rfgpe_2d_solver_general_inputs.dat"), "r"
+    ) as f:
         gi_template = f.read()
     return di_template, gi_template
 
@@ -282,10 +291,14 @@ def prepare_directory(
         nrows, ncols = 2, 2
         ub_ref_seu = sum(ubmax_assignment_seu.values()) / len(ubmax_assignment_seu)
         ub_str = ub_str_for_dir(ub_ref_seu)
-        build_di = lambda content, m: build_di_content_2x2(content, ubmax_assignment_seu, m)
+        build_di = lambda content, m: build_di_content_2x2(
+            content, ubmax_assignment_seu, m
+        )
     else:
         if ubmax_seu is None:
-            raise ValueError("Either ubmax_seu or ubmax_assignment_seu must be provided.")
+            raise ValueError(
+                "Either ubmax_seu or ubmax_assignment_seu must be provided."
+            )
         nrows, ncols = 1, 1
         ub_str = ub_str_for_dir(ubmax_seu)
         build_di = lambda content, m: build_di_content_1x1(content, ubmax_seu, m)
@@ -299,8 +312,12 @@ def prepare_directory(
     di_template, gi_template = _load_template_inputs(template_dir)
 
     di_content = build_di(di_template, mode)
-    gi_imag = build_gi_phase_content(gi_template, omega, diag_stride, "imag", nrows, ncols)
-    gi_real = build_gi_phase_content(gi_template, omega, diag_stride, "real", nrows, ncols)
+    gi_imag = build_gi_phase_content(
+        gi_template, omega, diag_stride, "imag", nrows, ncols
+    )
+    gi_real = build_gi_phase_content(
+        gi_template, omega, diag_stride, "real", nrows, ncols
+    )
 
     with open(os.path.join(run_dir, "di_modified.dat"), "w") as f:
         f.write(di_content)

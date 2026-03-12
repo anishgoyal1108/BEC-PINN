@@ -3,7 +3,12 @@ import subprocess
 
 from .runs import find_existing_runs, find_sim_folder
 from .settings import get_circulation_png_path
-from .ui import build_group_options, build_secondary_options, checkbox_menu, select_from_menu
+from .ui import (
+    build_group_options,
+    build_secondary_options,
+    checkbox_menu,
+    select_from_menu,
+)
 from .viewer import open_files_in_viewer
 
 
@@ -77,19 +82,21 @@ def _build_circulation_script(
     ]
 
     DISPLAY_ORDER = [
-    (2, "TL"),
-    (3, "TR"),
-    (0, "BL"),
-    (1, "BR"),
+        (2, "TL"),
+        (3, "TR"),
+        (0, "BL"),
+        (1, "BR"),
     ]
-    
+
     for display_idx, (fortran_pair_idx, cell_label) in enumerate(DISPLAY_ORDER):
         if fortran_pair_idx >= pair_count:
             continue
         col_a = 2 + (2 * fortran_pair_idx)
         col_b = col_a + 1
         pair_label = cell_label
-        lines.append(f"set title {_gnuplot_quote(f'circulation: {run_dir_name} | {pair_label}')}")
+        lines.append(
+            f"set title {_gnuplot_quote(f'circulation: {run_dir_name} | {pair_label}')}"
+        )
         lines.append(f"set ylabel {_gnuplot_quote(pair_label)}")
         if display_idx < pair_count - 1:
             lines.append("unset xlabel")
@@ -105,6 +112,7 @@ def _build_circulation_script(
         )
     lines.extend(["unset multiplot", "set output"])
     return "\n".join(lines) + "\n"
+
 
 def _run_gnuplot_script(folder: str, script_text: str) -> subprocess.CompletedProcess:
     script_path = os.path.join(folder, "_temp_circulation_plot.gnu")
@@ -156,18 +164,24 @@ def run_circulation_plotter():
 
         pair_count = _detect_circulation_pair_count(circ_file)
         if pair_count == 0:
-            print(f"  Invalid circulation.dat format in {os.path.basename(real_folder)}")
+            print(
+                f"  Invalid circulation.dat format in {os.path.basename(real_folder)}"
+            )
             continue
 
         print(f"  Plotting {run_dir_name}...")
         png_path = get_circulation_png_path(run_dir_name)
-        circulation_script = _build_circulation_script(run_dir_name, png_path, pair_count)
+        circulation_script = _build_circulation_script(
+            run_dir_name, png_path, pair_count
+        )
         result = _run_gnuplot_script(real_folder, circulation_script)
         if result.returncode == 0:
             if os.path.isfile(png_path):
                 plots_created.append(png_path)
         else:
-            print(f"  Failed to plot {run_dir_name} (gnuplot exit code {result.returncode})")
+            print(
+                f"  Failed to plot {run_dir_name} (gnuplot exit code {result.returncode})"
+            )
 
     if plots_created:
         viewer, opened = open_files_in_viewer(plots_created)

@@ -4,7 +4,9 @@ from typing import TextIO
 from .settings import get_execution_log_path
 
 
-def print_simulation_debug(run_dir_name: str, imag_only: bool, global_imag_only: bool) -> None:
+def print_simulation_debug(
+    run_dir_name: str, imag_only: bool, global_imag_only: bool
+) -> None:
     if imag_only:
         print(
             f"  [DEBUG] {run_dir_name}: imag_only={imag_only}, IMAG_ONLY={global_imag_only}, will SKIP real-time"
@@ -49,7 +51,9 @@ def write_execution_log_result(
     exit_code: int,
 ) -> None:
     omega_str = run_dir_name.split("_")[1] if "_" in run_dir_name else "unknown"
-    log.write(f"  {run_dir_name} (OmegaR={omega_str}): {elapsed:.2f}s, exit_code={exit_code}\n")
+    log.write(
+        f"  {run_dir_name} (OmegaR={omega_str}): {elapsed:.2f}s, exit_code={exit_code}\n"
+    )
     log.flush()
 
 
