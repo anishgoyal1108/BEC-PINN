@@ -20,7 +20,7 @@ from .settings import (
     get_omega_cache_dir,
 )
 from .solver import run_solver_script
-from .templates import cleanup_run_directory, prepare_directory_2x2, validate_template_dir
+from .templates import cleanup_run_directory, prepare_directory, validate_template_dir
 
 EXPERIMENT_LABELS = {
     0: "0 transfers (all no-transfer)",
@@ -142,6 +142,35 @@ def classify_and_select_ubmax_values(omega_r: float, experiment_k: int) -> Exper
 
 def parse_experiment_selection(selection_text: str) -> list[int]:
     return parse_frame_range(selection_text, (0, 4))
+
+
+def _prompt_custom_barrier_strengths() -> dict[str, float] | None:
+    """Interactively prompt the user for a custom nK value for each target.
+
+    Returns a dict mapping each target name to its nK value, or None if the
+    user cancels or provides invalid input.
+    """
+    print("\n  Enter custom barrier strengths (nK) for each target:")
+    custom_nk: dict[str, float] = {}
+    for target in TARGET_ORDER:
+        raw = input(f"    {target} barrier strength (nK): ").strip()
+        try:
+            custom_nk[target] = float(raw)
+        except ValueError:
+            print(f"  Invalid value for {target}. Aborting custom entry.")
+            return None
+    return custom_nk
+
+
+def _build_selection_from_custom_nk(custom_nk: dict[str, float]) -> ExperimentSelection:
+    """Build an ExperimentSelection from user-supplied per-target nK values."""
+    ub_seu_by_target = {t: ubmax_scaled_from_T_nK(custom_nk[t]) for t in TARGET_ORDER}
+    return ExperimentSelection(
+        ub_nk_by_target=dict(custom_nk),
+        ub_seu_by_target=ub_seu_by_target,
+        transfer_bin_nk=list(custom_nk.values()),
+        no_transfer_nk=next(iter(custom_nk.values())),
+    )
 
 
 def _cache_num(value: float) -> str:
@@ -279,11 +308,10 @@ def _run_single_experiment(
     start = time.time()
     imag_only_mode = is_imag_only_mode()
 
-    ub_ref_seu = sum(selection.ub_seu_by_target.values()) / len(TARGET_ORDER)
-    run_dir_name, run_dir = prepare_directory_2x2(
+    ub_ref_seu = sum(selection.ub_seu_by_target.values()) / 4
+    run_dir_name, run_dir = prepare_directory (
         omega=omega,
         experiment_k=experiment_k,
-        ub_ref_seu=ub_ref_seu,
         ubmax_assignment_seu=selection.ub_seu_by_target,
         diag_stride=diag_stride,
         geometry_mode=geometry_mode,
@@ -377,18 +405,32 @@ def run_2x2_threshold_experiment() -> None:
         print("  Invalid diag_stride value.")
         return
 
+    use_custom = input("  Use custom barrier strengths? (y/n, default=n): ").strip().lower()
+    custom_selection: ExperimentSelection | None = None
+    if use_custom == "y":
+        custom_nk = _prompt_custom_barrier_strengths()
+        if custom_nk is None:
+            return
+        custom_selection = _build_selection_from_custom_nk(custom_nk)
+
     selections_by_k: dict[int, ExperimentSelection] = {}
-    try:
+    if custom_selection is not None:
         for experiment_k in selected_experiments:
-            selections_by_k[experiment_k] = classify_and_select_ubmax_values(omega, experiment_k)
-    except ValueError as e:
-        print(f"\n  ERROR: {e}")
-        return
+            selections_by_k[experiment_k] = custom_selection
+    else:
+        try:
+            for experiment_k in selected_experiments:
+                selections_by_k[experiment_k] = classify_and_select_ubmax_values(omega, experiment_k)
+        except ValueError as e:
+            print(f"\n  ERROR: {e}")
+            return
 
     print(f"\n  OmegaR = {omega:.4f}")
     print(f"  diag_stride = {diag_stride}")
     print(f"  geometry = {geometry_mode}")
     print(f"  Experiments to run: {selected_experiments}")
+    if custom_selection is not None:
+        print("  Barrier strengths: CUSTOM")
 
     for experiment_k in selected_experiments:
         selection = selections_by_k[experiment_k]
@@ -405,9 +447,10 @@ def run_2x2_threshold_experiment() -> None:
         return
 
     session_start = time.time()
+    custom_tag = ", custom_barriers=True" if custom_selection is not None else ""
     log_header = (
         f"(omega={omega:.4f}, experiments={selected_experiments}, "
-        f"diag_stride={diag_stride}, geometry={geometry_mode}, imag_only={imag_only_mode})\n"
+        f"diag_stride={diag_stride}, geometry={geometry_mode}, imag_only={imag_only_mode}{custom_tag})\n"
     )
     log_path = build_execution_log_path(session_start)
 

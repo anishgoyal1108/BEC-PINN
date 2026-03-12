@@ -1,3 +1,4 @@
+# batch.py
 import os
 import re
 import shutil
@@ -29,12 +30,51 @@ from .templates import (
     find_template_files,
     prepare_directory,
     validate_template_dir,
-    ub_str_for_dir,
 )
 
+
+def _print_template_status() -> None:
+    print(f"\nLooking for template files in: {TEMPLATE_DIR}")
+    validate_template_dir(TEMPLATE_DIR)
+    di_template, gi_template, _ = find_template_files(TEMPLATE_DIR)
+    print(f"  Found DI template: {os.path.basename(di_template)}")
+    print(f"  Found GI template: {os.path.basename(gi_template)}")
+
+
+def _prepare_single_1x1_run(
+    omega: float,
+    ubmax_seu: float,
+    diag_stride: int,
+    geometry_mode: str | None = None,
+) -> str:
+    run_dir_name, _run_dir = prepare_directory(
+        omega=omega,
+        diag_stride=diag_stride,
+        geometry_mode=geometry_mode,
+        ubmax_seu=ubmax_seu,
+    )
+    return run_dir_name
+
+
+def _existing_1x1_run_dirs_for_omega(
+    omega: float,
+    geometry_mode: str | None = None,
+) -> list[str]:
+    mode = (geometry_mode or get_geometry_mode()).lower()
+    omega_key = f"{omega:.4f}"
+    runs_grouped = find_runs_grouped_by_omega()
+    return [
+        run["dir_name"]
+        for run in runs_grouped.get(omega_key, [])
+        if run.get("run_kind") == "1x1" and run.get("geometry", "ring") == mode
+    ]
+
+
 def run_simulation(
-    run_dir_name: str, cached_ground_state: str = None, imag_only: bool = None
-):
+    run_dir_name: str,
+    cached_ground_state: str | None = None,
+    imag_only: bool | None = None,
+) -> tuple[str, float, int]:
     if imag_only is None:
         imag_only = is_imag_only_mode()
 
@@ -73,7 +113,6 @@ def run_simulation(
             if os.path.exists(os.path.join(run_dir, "sim_folder")):
                 shutil.move(os.path.join(run_dir, "sim_folder"), imag_folder)
 
-            # final_wf.dat lives in imag_folder after save_sim.sh (it moves it into sim_folder); fallback to run_dir.
             final_wf_imag = os.path.join(imag_folder, "final_wf.dat")
             final_wf_parent = os.path.join(run_dir, "final_wf.dat")
             final_wf_src = final_wf_imag if os.path.isfile(final_wf_imag) else final_wf_parent
@@ -87,9 +126,6 @@ def run_simulation(
                     omega_value,
                     geometry_mode=get_geometry_mode(),
                 )
-
-                final_wf_imag = os.path.join(imag_folder, "final_wf.dat")
-                final_wf_parent = os.path.join(run_dir, "final_wf.dat")
 
                 final_wf = None
                 if os.path.isfile(final_wf_imag):
@@ -174,11 +210,7 @@ def prompt_batch_inputs_ubmax_sweep():
         input("Enter diag_stride (diagnostics every N steps, 0=skip, e.g., 10): ")
     )
 
-    print(f"\nLooking for template files in: {TEMPLATE_DIR}")
-    validate_template_dir(TEMPLATE_DIR)
-    di_template, gi_template, _ = find_template_files(TEMPLATE_DIR)
-    print(f"  Found DI template: {os.path.basename(di_template)}")
-    print(f"  Found GI template: {os.path.basename(gi_template)}")
+    _print_template_status()
 
     t_values = np.round(np.linspace(t_start, t_end, num=num_runs), 4)
     ubmax_values = [ubmax_scaled_from_T_nK(t) for t in t_values]
@@ -217,11 +249,7 @@ def prompt_batch_inputs_omega_sweep():
         input("Enter diag_stride (diagnostics every N steps, 0=skip, e.g., 10): ")
     )
 
-    print(f"\nLooking for template files in: {TEMPLATE_DIR}")
-    validate_template_dir(TEMPLATE_DIR)
-    di_template, gi_template, _ = find_template_files(TEMPLATE_DIR)
-    print(f"  Found DI template: {os.path.basename(di_template)}")
-    print(f"  Found GI template: {os.path.basename(gi_template)}")
+    _print_template_status()
 
     ubmax_seu = ubmax_scaled_from_T_nK(t_nk)
     omega_values = np.round(np.linspace(omega_start, omega_end, num=num_runs), 4)
@@ -276,20 +304,13 @@ def run_batch():
         omega_end = params["omega_end"]
 
         ubmax_seu = ubmax_scaled_from_T_nK(t_nk)
-        ub_str = ub_str_for_dir(ubmax_seu)
         omega_values = np.round(np.linspace(omega_start, omega_end, num=num_runs), 4)
 
         print(f"\nOmega values: {list(omega_values)}")
         print(f"Fixed Ubmax (SEU): {ubmax_seu:.4f}")
 
         run_dirs = [
-            prepare_directory(
-                omega,
-                ubmax_seu,
-                ub_str,
-                diag_stride,
-                geometry_mode=geometry_mode,
-            )
+            _prepare_single_1x1_run(omega, ubmax_seu, diag_stride, geometry_mode)
             for omega in omega_values
         ]
         log_header = (
@@ -297,7 +318,6 @@ def run_batch():
             f"n={num_runs}, diag_stride={diag_stride}, geometry={geometry_mode})\n"
         )
         cached_ground_state = None
-
     else:
         omega = params["omega"]
         t_start = params["t_start"]
@@ -307,19 +327,11 @@ def run_batch():
         print(f"\nTemperature values (nK): {t_values}")
 
         ubmax_values = [ubmax_scaled_from_T_nK(t) for t in t_values]
-        ub_str_values = [ub_str_for_dir(ub) for ub in ubmax_values]
-
         print(f"Ubmax (SEU) values: {[f'{ub:.4f}' for ub in ubmax_values]}")
 
         run_dirs = [
-            prepare_directory(
-                omega,
-                ubmax_seu,
-                ub_str,
-                diag_stride,
-                geometry_mode=geometry_mode,
-            )
-            for ubmax_seu, ub_str in zip(ubmax_values, ub_str_values)
+            _prepare_single_1x1_run(omega, ubmax_seu, diag_stride, geometry_mode)
+            for ubmax_seu in ubmax_values
         ]
         log_header = (
             f"(omega={omega}, T in [{t_start},{t_end}]nK, "
@@ -334,7 +346,7 @@ def run_batch():
             geometry_mode=geometry_mode,
         )
         if cached_ground_state:
-            print(f"  Will skip imaginary time for remaining {len(run_dirs)-1} runs.\n")
+            print(f"  Will skip imaginary time for remaining {len(run_dirs) - 1} runs.\n")
 
     print(f"\nCreated {len(run_dirs)} run directories. Starting simulations...\n")
 
@@ -351,7 +363,9 @@ def run_batch():
 
         for run_dir_name in run_dirs:
             run_dir_name_result, elapsed, exit_code = run_simulation(
-                run_dir_name, cached_ground_state, imag_only_mode
+                run_dir_name,
+                cached_ground_state,
+                imag_only_mode,
             )
             write_execution_log_result(log, run_dir_name_result, elapsed, exit_code)
             print(
@@ -362,22 +376,27 @@ def run_batch():
         print(f"\nTotal runtime: {script_elapsed:.2f}s")
 
 
+def run_single_1x1(
+    omega: float,
+    ubmax_seu: float,
+    diag_stride: int,
+    geometry_mode: str | None = None,
+) -> tuple[str, float, int]:
+    validate_template_dir(TEMPLATE_DIR)
+    mode = geometry_mode or get_geometry_mode()
+    run_dir_name = _prepare_single_1x1_run(omega, ubmax_seu, diag_stride, mode)
+    cached = find_or_create_ground_state_omega(
+        omega,
+        _existing_1x1_run_dirs_for_omega(omega, mode),
+        geometry_mode=mode,
+    )
+    return run_simulation(run_dir_name, cached, is_imag_only_mode())
+
+
 def run_single_ubmax(
     omega: float,
     ubmax_nK: float,
     diag_stride: int,
 ) -> tuple[str, float, int]:
-    validate_template_dir(TEMPLATE_DIR)
-    geometry_mode = get_geometry_mode()
     ubmax_seu = ubmax_scaled_from_T_nK(ubmax_nK)
-    ub_str = ub_str_for_dir(ubmax_seu)
-    run_dir_name = prepare_directory(omega, ubmax_seu, ub_str, diag_stride, geometry_mode=geometry_mode)
-    runs_grouped = find_runs_grouped_by_omega()
-    omega_key = f"{omega:.4f}"
-    run_dirs = [
-        r["dir_name"]
-        for r in runs_grouped.get(omega_key, [])
-        if r.get("run_kind") == "1x1" and r.get("geometry", "ring") == geometry_mode
-    ]
-    cached = find_or_create_ground_state_omega(omega, run_dirs, geometry_mode=geometry_mode)
-    return run_simulation(run_dir_name, cached, is_imag_only_mode())
+    return run_single_1x1(omega, ubmax_seu, diag_stride, get_geometry_mode())

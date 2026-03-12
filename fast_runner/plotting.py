@@ -76,13 +76,22 @@ def _build_circulation_script(
         "margins 0.08,0.86,0.07,0.95 spacing 0.00,0.04",
     ]
 
-    for pair_idx in range(pair_count):
-        col_a = 2 + (2 * pair_idx)
+    DISPLAY_ORDER = [
+    (2, "TL"),
+    (3, "TR"),
+    (0, "BL"),
+    (1, "BR"),
+    ]
+    
+    for display_idx, (fortran_pair_idx, cell_label) in enumerate(DISPLAY_ORDER):
+        if fortran_pair_idx >= pair_count:
+            continue
+        col_a = 2 + (2 * fortran_pair_idx)
         col_b = col_a + 1
-        pair_label = f"target {pair_idx + 1}"
+        pair_label = cell_label
         lines.append(f"set title {_gnuplot_quote(f'circulation: {run_dir_name} | {pair_label}')}")
         lines.append(f"set ylabel {_gnuplot_quote(pair_label)}")
-        if pair_idx < pair_count - 1:
+        if display_idx < pair_count - 1:
             lines.append("unset xlabel")
             lines.append("set format x ''")
         else:
@@ -94,10 +103,8 @@ def _build_circulation_script(
             "'' u 1:"
             f"{col_b} w d lw 1.6 title 'ring 2 (col {col_b})'"
         )
-
     lines.extend(["unset multiplot", "set output"])
     return "\n".join(lines) + "\n"
-
 
 def _run_gnuplot_script(folder: str, script_text: str) -> subprocess.CompletedProcess:
     script_path = os.path.join(folder, "_temp_circulation_plot.gnu")

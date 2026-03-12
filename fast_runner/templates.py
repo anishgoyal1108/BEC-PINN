@@ -126,10 +126,12 @@ def replace_diag_stride_in_gi(content: str, diag_stride: int) -> str:
 _GI_NT_LINE_INDEX = 54
 _GI_NFRAMES_LINE_INDEX = 68
 _GI_TFF_LINE_INDEX = 82
+_GI_NATOMS_LINE_INDEX = 12
 
 _REAL_NT = 117268
 _REAL_NFRAMES = 290
 _REAL_TFF = 4.69072
+_BASE_NATOMS = 166667.0
 
 
 def replace_nt_in_gi(content: str, nt: int) -> str:
@@ -150,6 +152,13 @@ def replace_tff_in_gi(content: str, tff: float) -> str:
     lines = content.splitlines(keepends=True)
     if len(lines) > _GI_TFF_LINE_INDEX:
         lines[_GI_TFF_LINE_INDEX] = f"{tff}d0\n"
+    return "".join(lines)
+
+
+def replace_natoms_in_gi(content: str, natoms: float) -> str:
+    lines = content.splitlines(keepends=True)
+    if len(lines) > _GI_NATOMS_LINE_INDEX:
+        lines[_GI_NATOMS_LINE_INDEX] = f"{natoms:.1f}d0\n"
     return "".join(lines)
 
 
@@ -181,6 +190,8 @@ def build_gi_phase_content(
     omega: float,
     diag_stride: int,
     phase: str,
+    nrows: int = 1,
+    ncols: int = 1,
 ) -> str:
     phase_lower = phase.lower()
     is_real = phase_lower == "real"
@@ -190,6 +201,7 @@ def build_gi_phase_content(
     content = replace_phase_imprint_in_gi(content, 1 if is_real else 0)
     content = replace_omega_in_gi(content, omega)
     content = replace_diag_stride_in_gi(content, diag_stride)
+    content = replace_natoms_in_gi(content, _BASE_NATOMS * nrows * ncols)
     if is_real:
         content = replace_nt_in_gi(content, _REAL_NT)
         content = replace_nframes_in_gi(content, _REAL_NFRAMES)
@@ -250,27 +262,45 @@ def _load_template_inputs(template_dir: str = TEMPLATE_DIR) -> tuple[str, str]:
     return di_template, gi_template
 
 
-def _prepare_directory_shared(
+def prepare_directory(
     omega: float,
-    ub_str: str,
     diag_stride: int,
-    build_di_content_fn,
     geometry_mode: str | None = None,
+    ubmax_seu: float | None = None,
+    ubmax_assignment_seu: dict[str, float] | None = None,
     experiment_k: int | None = None,
     template_dir: str = TEMPLATE_DIR,
 ) -> tuple[str, str]:
+    """Unified directory preparation for both 1x1 and 2x2 runs.
+
+    For 1x1: pass ubmax_seu.
+    For 2x2: pass ubmax_assignment_seu (and optionally experiment_k).
+    """
     mode = (geometry_mode or get_geometry_mode()).lower()
+
+    if ubmax_assignment_seu is not None:
+        nrows, ncols = 2, 2
+        ub_ref_seu = sum(ubmax_assignment_seu.values()) / len(ubmax_assignment_seu)
+        ub_str = ub_str_for_dir(ub_ref_seu)
+        build_di = lambda content, m: build_di_content_2x2(content, ubmax_assignment_seu, m)
+    else:
+        if ubmax_seu is None:
+            raise ValueError("Either ubmax_seu or ubmax_assignment_seu must be provided.")
+        nrows, ncols = 1, 1
+        ub_str = ub_str_for_dir(ubmax_seu)
+        build_di = lambda content, m: build_di_content_1x1(content, ubmax_seu, m)
+
     run_dir_base = _build_run_dir_name(omega, ub_str, mode, experiment_k)
     run_dir_name = _unique_run_dir_name(run_dir_base)
     run_dir = os.path.join(SCRIPT_DIR, run_dir_name)
     os.makedirs(run_dir, exist_ok=True)
 
     _copy_template_support_files(run_dir, template_dir)
-    di_template_content, gi_template_content = _load_template_inputs(template_dir)
+    di_template, gi_template = _load_template_inputs(template_dir)
 
-    di_content = build_di_content_fn(di_template_content, mode)
-    gi_imag = build_gi_phase_content(gi_template_content, omega, diag_stride, "imag")
-    gi_real = build_gi_phase_content(gi_template_content, omega, diag_stride, "real")
+    di_content = build_di(di_template, mode)
+    gi_imag = build_gi_phase_content(gi_template, omega, diag_stride, "imag", nrows, ncols)
+    gi_real = build_gi_phase_content(gi_template, omega, diag_stride, "real", nrows, ncols)
 
     with open(os.path.join(run_dir, "di_modified.dat"), "w") as f:
         f.write(di_content)
@@ -280,47 +310,3 @@ def _prepare_directory_shared(
         f.write(gi_real)
 
     return run_dir_name, run_dir
-
-
-def prepare_directory(
-    omega: float,
-    ubmax_seu: float,
-    ub_str: str,
-    diag_stride: int,
-    geometry_mode: str | None = None,
-) -> str:
-    run_dir_name, _run_dir = _prepare_directory_shared(
-        omega=omega,
-        ub_str=ub_str,
-        diag_stride=diag_stride,
-        build_di_content_fn=lambda di_template, mode: build_di_content_1x1(
-            di_template,
-            ubmax_seu=ubmax_seu,
-            geometry_mode=mode,
-        ),
-        geometry_mode=geometry_mode,
-    )
-    return run_dir_name
-
-
-def prepare_directory_2x2(
-    omega: float,
-    experiment_k: int,
-    ub_ref_seu: float,
-    ubmax_assignment_seu: dict[str, float],
-    diag_stride: int,
-    geometry_mode: str | None = None,
-) -> tuple[str, str]:
-    ub_str = ub_str_for_dir(ub_ref_seu)
-    return _prepare_directory_shared(
-        omega=omega,
-        ub_str=ub_str,
-        diag_stride=diag_stride,
-        build_di_content_fn=lambda di_template, mode: build_di_content_2x2(
-            di_template,
-            ubmax_assignment_seu=ubmax_assignment_seu,
-            geometry_mode=mode,
-        ),
-        geometry_mode=geometry_mode,
-        experiment_k=experiment_k,
-    )
