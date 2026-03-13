@@ -29,12 +29,25 @@ def _estimate_density_cmax(
     folder: str,
     percentile: float = 98.0,
     natoms: float = 666667.0,
+    max_sample: int = 10,
 ) -> float | None:
     if np is None:
         return None
 
+    all_paths = sorted(glob.glob(os.path.join(folder, "wf_ascii_*.dat")))
+    if not all_paths:
+        return None
+
+    # Sample evenly across the available frames rather than reading all of them.
+    # Each file can be ~17 MB of text; reading hundreds would hang for minutes.
+    if len(all_paths) > max_sample:
+        indices = [int(i * (len(all_paths) - 1) / (max_sample - 1)) for i in range(max_sample)]
+        sample_paths = [all_paths[i] for i in indices]
+    else:
+        sample_paths = all_paths
+
     values: list[float] = []
-    for path in glob.glob(os.path.join(folder, "wf_ascii_*.dat")):
+    for path in sample_paths:
         try:
             data = np.loadtxt(path, usecols=(2, 3))
         except Exception:
@@ -202,11 +215,11 @@ def _run_gnuplot_frame(
     output_name: str,
     bare_plot: bool = False,
     bare_size: int = 600,
+    cmax: float | None = None,
 ) -> bool:
     script_basename = os.path.basename(script_name)
 
     if script_basename == "density_distribution_movie.gnu":
-        cmax = _estimate_density_cmax(folder)
         content = _build_movie_gnu_script("density", frame_num, frame_num, cmax)
         script_path = os.path.join(folder, script_basename)
     elif script_basename == "phase_distribution_movie.gnu":
@@ -543,10 +556,18 @@ def create_density_phase_frames_batch(
     do_density = image_type in ("density", "both")
     do_phase = image_type in ("phase", "both")
 
+    # Pre-compute cmax per folder in the main process to avoid calling numpy
+    # inside worker processes (causes semaphore deadlock with forkserver).
+    folder_cmax: dict[str, float | None] = {}
+    if do_density:
+        for folder, _run_dir_name, _frames in runs_data:
+            if folder not in folder_cmax:
+                folder_cmax[folder] = _estimate_density_cmax(folder)
+
     tasks = []
     for folder, run_dir_name, frame_numbers in runs_data:
-        density_gnu = os.path.join(folder, "density_distribution_movie.gnu")
-        phase_gnu = os.path.join(folder, "phase_distribution_movie.gnu")
+        density_gnu = "density_distribution_movie.gnu"
+        phase_gnu = "phase_distribution_movie.gnu"
         if not do_density and not do_phase:
             continue
         for frame_num in frame_numbers:
@@ -561,6 +582,7 @@ def create_density_phase_frames_batch(
                         frame_num,
                         density_output_dir,
                         density_output_name,
+                        folder_cmax.get(folder),
                     )
                 )
             if do_phase:
@@ -574,6 +596,7 @@ def create_density_phase_frames_batch(
                         frame_num,
                         phase_output_dir,
                         phase_output_name,
+                        None,
                     )
                 )
 
@@ -600,6 +623,7 @@ def create_density_phase_frames_batch(
                 output_name,
                 True,
                 1200 if "_2x2_k" in run_dir_name else 600,
+                cmax,
             )
             for (
                 _ft,
@@ -609,6 +633,7 @@ def create_density_phase_frames_batch(
                 frame_num,
                 output_dir,
                 output_name,
+                cmax,
             ) in tasks
         ]
 
@@ -621,6 +646,7 @@ def create_density_phase_frames_batch(
                 frame_num,
                 output_dir,
                 output_name,
+                _cmax,
             ) = tasks[i]
             success = future.result()
             output_path = os.path.join(output_dir, output_name)
