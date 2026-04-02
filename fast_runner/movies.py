@@ -68,8 +68,25 @@ def _estimate_density_cmax(
     return float(np.percentile(values, percentile))
 
 
+_WF_ASCII_NUM_RE = re.compile(r"wf_ascii_(\d+)\.dat$")
+
+
+def _wf_ascii_field_width(folder: str) -> int:
+    """Zero-pad width in wf_ascii filenames (3 legacy, 5 after Fortran I5.5 fix)."""
+    w = 3
+    for f in glob.glob(os.path.join(folder, "wf_ascii_*.dat")):
+        m = _WF_ASCII_NUM_RE.search(os.path.basename(f))
+        if m:
+            w = max(w, len(m.group(1)))
+    return w
+
+
 def _build_movie_gnu_script(
-    kind: str, start: int, end: int, cmax: float | None = None
+    kind: str,
+    start: int,
+    end: int,
+    cmax: float | None = None,
+    wf_field_width: int = 3,
 ) -> str:
     header = (
         "set key off\n"
@@ -95,6 +112,7 @@ def _build_movie_gnu_script(
         "set term gif\n"
     )
 
+    wf = wf_field_width
     if kind == "density":
         max_val = cmax if cmax is not None and cmax > 0 else 20000.0
         body = (
@@ -102,9 +120,9 @@ def _build_movie_gnu_script(
             f"set cbrange [0.0:{max_val:.6g}]\n"
             f"do for [i={start}:{end}] {{\n"
             "set term gif\n"
-            "set output sprintf('density_distribution_%03d.gif',i)\n"
-            "set title sprintf('time = %03d ms',i)\n"
-            "splot sprintf('wf_ascii_%03d.dat',i) "
+            f"set output sprintf('density_distribution_%0{wf}d.gif',i)\n"
+            f"set title sprintf('time = %0{wf}d ms',i)\n"
+            f"splot sprintf('wf_ascii_%0{wf}d.dat',i) "
             "u (($1)*10.0):(($2)*10.0):(($3*$3+$4*$4)*natoms) w l\n"
             "}\n"
         )
@@ -112,9 +130,9 @@ def _build_movie_gnu_script(
         body = (
             f"do for [i={start}:{end}] {{\n"
             "set term gif\n"
-            "set output sprintf('phase_distribution_%03d.gif',i)\n"
-            "set title sprintf('phase frame %03d',i)\n"
-            "splot sprintf('wf_ascii_%03d.dat',i) "
+            f"set output sprintf('phase_distribution_%0{wf}d.gif',i)\n"
+            f"set title sprintf('phase frame %0{wf}d',i)\n"
+            f"splot sprintf('wf_ascii_%0{wf}d.dat',i) "
             "u (($1)*10.0):(($2)*10.0):(atan2($3,$4)) w l\n"
             "}\n"
         )
@@ -166,10 +184,9 @@ def parse_frame_range(frame_str: str, available_range: tuple[int, int]) -> list[
 
 
 def _get_frame_range(folder: str) -> tuple[int, int] | None:
-    pattern = re.compile(r"wf_ascii_(\d+)\.dat")
     indices = []
     for f in glob.glob(os.path.join(folder, "wf_ascii_*.dat")):
-        m = pattern.search(os.path.basename(f))
+        m = _WF_ASCII_NUM_RE.search(os.path.basename(f))
         if m:
             indices.append(int(m.group(1)))
     if not indices:
@@ -180,11 +197,14 @@ def _get_frame_range(folder: str) -> tuple[int, int] | None:
 def _run_gnuplot_chunk(
     folder: str, kind: Literal["density", "phase"], start: int, end: int
 ) -> bool:
+    wf_w = _wf_ascii_field_width(folder)
     if kind == "density":
         cmax = _estimate_density_cmax(folder)
-        content = _build_movie_gnu_script("density", start, end, cmax)
+        content = _build_movie_gnu_script(
+            "density", start, end, cmax, wf_field_width=wf_w
+        )
     elif kind == "phase":
-        content = _build_movie_gnu_script("phase", start, end)
+        content = _build_movie_gnu_script("phase", start, end, wf_field_width=wf_w)
     else:
         raise ValueError(f"Unknown movie kind: {kind}")
 
@@ -213,13 +233,16 @@ def _run_gnuplot_frame(
     bare_size: int = 600,
     cmax: float | None = None,
 ) -> bool:
+    wf_w = _wf_ascii_field_width(folder)
     if kind == "density":
         eff_cmax = cmax if cmax is not None else _estimate_density_cmax(folder)
         content = _build_movie_gnu_script(
-            "density", frame_num, frame_num, eff_cmax
+            "density", frame_num, frame_num, eff_cmax, wf_field_width=wf_w
         )
     elif kind == "phase":
-        content = _build_movie_gnu_script("phase", frame_num, frame_num)
+        content = _build_movie_gnu_script(
+            "phase", frame_num, frame_num, wf_field_width=wf_w
+        )
     else:
         raise ValueError(f"Unknown movie kind: {kind}")
 

@@ -399,8 +399,9 @@ c
 c
 c	create name of output file to open
 c
-          write(counter_string,"(I3.3)") frame_counter
-          f1 = "wf_ascii_"//counter_string
+c       I5.5 supports frame_counter >> 999 (I3.3 overflowed to *** past 999)
+          write(counter_string,"(I5.5)") frame_counter
+          f1 = "wf_ascii_"//trim(counter_string)
           filename=f1//".dat"
 ccc          print *, filename
 ccc          pause

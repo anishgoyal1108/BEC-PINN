@@ -15,7 +15,7 @@ else
     cp ./*.sh ./sim_folder/. 2>/dev/null || true
     cp ./*.gnu ./sim_folder/. 2>/dev/null || true
     cp ./Makefile ./sim_folder/. 2>/dev/null || true
-    for f in ./wf_ascii_???.dat; do [ -e "$f" ] && mv "$f" ./sim_folder/.; done || true
+    for f in ./wf_ascii_*.dat; do [ -e "$f" ] && mv "$f" ./sim_folder/.; done || true
     [ -f ./initial_wf.dat ] && cp ./initial_wf.dat ./sim_folder/. || true
     [ -f ./final_wf.dat ] && cp ./final_wf.dat ./sim_folder/. || true
     [ -f ./circulation.dat ] && mv ./circulation.dat ./sim_folder/. || true
