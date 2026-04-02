@@ -1,5 +1,6 @@
 from .batch import run_batch
 from .cache import manage_omega_cache
+from .custom import run_custom_experiment
 from .experiment_2x2 import run_2x2_threshold_experiment
 from .movies import run_mass_density_phase_creator, run_movie_creator, run_movie_viewer
 from .plotting import run_circulation_plotter
@@ -74,6 +75,7 @@ def main_menu():
         print("  10. Toggle Sweep Mode")
         print("  11. Toggle Geometry Mode (RING/TARGET)")
         print("  12. Toggle Execution Mode (FULL/IMAG_ONLY)")
+        print("  13. Run Custom Experiment")
         print("  0/q. Quit")
 
         choice = input("\nSelect option: ").strip().lower()
@@ -108,6 +110,8 @@ def main_menu():
             _toggle_geometry_mode_with_message()
         elif choice == "12":
             _toggle_imag_mode_with_message()
+        elif choice == "13":
+            run_custom_experiment()
         else:
             print("Invalid option, try again.")
 

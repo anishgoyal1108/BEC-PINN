@@ -11,7 +11,12 @@ from .execution_log import (
     write_execution_log_total_runtime,
 )
 from .mode_utils import cleanup_real_time_artifacts, is_imag_only_mode
-from .movies import _get_frame_range, _run_gnuplot_frame, parse_frame_range
+from .movies import (
+    _estimate_density_cmax,
+    _get_frame_range,
+    _run_gnuplot_frame,
+    parse_frame_range,
+)
 from .physics import ubmax_scaled_from_T_nK
 from .settings import (
     OUTPUT_PNG_DIR,
@@ -307,11 +312,12 @@ def _render_density_preview_2x2(run_dir_name: str, real_folder: str) -> str | No
     png_path = os.path.join(OUTPUT_PNG_DIR, output_name)
     success = _run_gnuplot_frame(
         folder=real_folder,
-        script_name="density_distribution_movie.gnu",
+        kind="density",
         frame_num=frame_num,
         output_dir=OUTPUT_PNG_DIR,
         output_name=output_name,
         bare_plot=False,
+        cmax=_estimate_density_cmax(real_folder),
     )
 
     if success and os.path.isfile(png_path):
