@@ -22,7 +22,6 @@ from .settings import (
     OUTPUT_PNG_DIR,
     get_geometry_mode,
     get_mode_cache_dir,
-    get_omega_cache_dir,
 )
 from .solver import run_solver_script
 from .templates import cleanup_run_directory, prepare_directory, validate_template_dir
@@ -196,17 +195,6 @@ def _cache_num(value: float) -> str:
     return f"{value:.1f}".replace(".", "p")
 
 
-def get_omega_cache_path_2x2(
-    omega: float,
-    geometry_mode: str | None = None,
-) -> str:
-    mode = (geometry_mode or get_geometry_mode()).lower()
-    return os.path.join(
-        get_omega_cache_dir("2x2", mode),
-        f"ground_state_geom_{mode}_omega_{omega:.4f}.dat",
-    )
-
-
 def _run_phase_with_inputs(
     run_dir: str,
     run_dir_name: str,
@@ -238,49 +226,6 @@ def _run_phase_with_inputs(
         shutil.move(sim_folder, target_folder)
 
     return 0
-
-
-def find_or_create_ground_state_2x2(
-    omega: float,
-    run_dir: str,
-    run_dir_name: str,
-    geometry_mode: str,
-) -> str | None:
-    cache_path = get_omega_cache_path_2x2(omega, geometry_mode)
-    if os.path.isfile(cache_path):
-        print(f"  Found cached 2x2 ground state for omega={omega:.4f}: {cache_path}")
-        return cache_path
-
-    imag_folder = os.path.join(run_dir, f"{run_dir_name}_imag")
-    final_wf_imag = os.path.join(imag_folder, "final_wf.dat")
-    if os.path.isfile(final_wf_imag):
-        os.makedirs(get_omega_cache_dir("2x2", geometry_mode), exist_ok=True)
-        shutil.copy2(final_wf_imag, cache_path)
-        print(f"  cached existing 2x2 ground state to: {cache_path}")
-        return cache_path
-
-    print(
-        "  No cached 2x2 ground state for "
-        f"omega={omega:.4f} and current Ub matrix; running imag time..."
-    )
-    exit_code = _run_phase_with_inputs(
-        run_dir, run_dir_name, "gi_imag_modified.dat", "imag"
-    )
-    if exit_code != 0:
-        print(f"  Error running 2x2 imag phase: exit_code={exit_code}")
-        return None
-
-    final_wf_root = os.path.join(run_dir, "final_wf.dat")
-    final_wf = final_wf_root if os.path.isfile(final_wf_root) else final_wf_imag
-    if not os.path.isfile(final_wf):
-        print("  ERROR: Could not find final_wf.dat after imag phase")
-        return None
-
-    shutil.copy2(final_wf, os.path.join(run_dir, "initial_wf.dat"))
-    os.makedirs(get_omega_cache_dir("2x2", geometry_mode), exist_ok=True)
-    shutil.copy2(final_wf, cache_path)
-    print(f"  2x2 ground state cached to: {cache_path}")
-    return cache_path
 
 
 def run_real_time_2x2(run_dir: str, run_dir_name: str) -> int:
@@ -335,7 +280,6 @@ def _run_single_experiment(
     start = time.time()
     imag_only_mode = is_imag_only_mode()
 
-    ub_ref_seu = sum(selection.ub_seu_by_target.values()) / 4
     run_dir_name, run_dir = prepare_directory(
         omega=omega,
         experiment_k=experiment_k,
@@ -344,18 +288,23 @@ def _run_single_experiment(
         geometry_mode=geometry_mode,
     )
 
-    cached_gs = find_or_create_ground_state_2x2(
-        omega,
-        run_dir,
-        run_dir_name,
-        geometry_mode,
+    # Always run imaginary time to obtain ground state
+    exit_code = _run_phase_with_inputs(
+        run_dir, run_dir_name, "gi_imag_modified.dat", "imag"
     )
-    if cached_gs is None:
-        return run_dir_name, time.time() - start, 1
+    if exit_code != 0:
+        return run_dir_name, time.time() - start, exit_code
 
-    initial_wf_path = os.path.join(run_dir, "initial_wf.dat")
-    if not os.path.isfile(initial_wf_path):
-        shutil.copy2(cached_gs, initial_wf_path)
+    imag_folder = os.path.join(run_dir, f"{run_dir_name}_imag")
+    final_wf_imag = os.path.join(imag_folder, "final_wf.dat")
+    final_wf_root = os.path.join(run_dir, "final_wf.dat")
+    final_wf_src = final_wf_imag if os.path.isfile(final_wf_imag) else final_wf_root
+    if not os.path.isfile(final_wf_src):
+        print(
+            f"  ERROR: Could not find final_wf.dat after imag phase for {run_dir_name}"
+        )
+        return run_dir_name, time.time() - start, 1
+    shutil.copy2(final_wf_src, os.path.join(run_dir, "initial_wf.dat"))
 
     print_simulation_debug(
         run_dir_name, imag_only=imag_only_mode, global_imag_only=is_imag_only_mode()
@@ -364,6 +313,10 @@ def _run_single_experiment(
         print(f"  [k={experiment_k}] Skipping real-time evolution (IMAG_ONLY mode)")
         cleanup_real_time_artifacts(run_dir, run_dir_name)
     else:
+        # Discard imag folder — only initial_wf.dat is needed for real time
+        if os.path.exists(imag_folder):
+            shutil.rmtree(imag_folder)
+
         exit_code = run_real_time_2x2(run_dir, run_dir_name)
         if exit_code != 0:
             return run_dir_name, time.time() - start, exit_code
@@ -496,7 +449,6 @@ def run_2x2_threshold_experiment() -> None:
             script_start=session_start,
             log_header=log_header,
             template_name="template/",
-            cached_ground_state=False,
             imag_only=imag_only_mode,
         )
 

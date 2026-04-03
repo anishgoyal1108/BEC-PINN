@@ -6,7 +6,7 @@ from concurrent.futures import ProcessPoolExecutor
 from typing import Literal
 
 try:
-    import numpy as np
+    import numpy as np  # type: ignore[import-not-found]  # pyright: ignore[reportMissingImports]
 except ImportError:  # pragma: no cover - optional dependency
     np = None  # type: ignore[assignment]
 
@@ -25,6 +25,8 @@ from .ui import (
 )
 from .viewer import open_files_in_viewer
 
+FrameKind = Literal["density", "phase"]
+
 
 def _estimate_density_cmax(
     folder: str,
@@ -42,7 +44,9 @@ def _estimate_density_cmax(
     # Sample evenly across the available frames rather than reading all of them.
     # Each file can be ~17 MB of text; reading hundreds would hang for minutes.
     if len(all_paths) > max_sample:
-        indices = [int(i * (len(all_paths) - 1) / (max_sample - 1)) for i in range(max_sample)]
+        indices = [
+            int(i * (len(all_paths) - 1) / (max_sample - 1)) for i in range(max_sample)
+        ]
         sample_paths = [all_paths[i] for i in indices]
     else:
         sample_paths = all_paths
@@ -144,7 +148,7 @@ def _build_movie_gnu_script(
 
 def parse_frame_range(frame_str: str, available_range: tuple[int, int]) -> list[int]:
     min_frame, max_frame = available_range
-    frame_numbers = set()
+    frame_numbers: set[int] = set()
     parts = [p.strip() for p in frame_str.split(",")]
 
     for part in parts:
@@ -403,7 +407,7 @@ def create_movies(folder: str, phase: str):
     print(
         f"  Creating density and phase frames ({len(chunks)} workers each, {lo}-{hi})..."
     )
-    tasks = []
+    tasks: list[tuple[FrameKind, int, int]] = []
     for start, end in chunks:
         tasks.append(("density", start, end))
         tasks.append(("phase", start, end))
@@ -465,7 +469,7 @@ def create_density_phase_frames(
         )
 
         phase_output_name = f"{run_dir_name}_real_{frame_num:03d}.png"
-        tasks.append(("phase", frame_num, phase_output_dir, phase_output_name))
+        tasks.append(("phase", frame_num, phase_output_dir, phase_output_name, None))
 
     density_paths = []
     phase_paths = []
@@ -494,7 +498,7 @@ def create_density_phase_frames(
                     )
                 )
             else:
-                _, frame_num, output_dir, output_name = t
+                _, frame_num, output_dir, output_name, _ = t
                 futures.append(
                     executor.submit(
                         _run_gnuplot_frame,
@@ -625,8 +629,8 @@ def create_density_phase_frames_batch(
 
     total_density = 0
     total_phase = 0
-    run_density_paths = {}
-    run_phase_paths = {}
+    run_density_paths: dict[str, list[tuple[str, int]]] = {}
+    run_phase_paths: dict[str, list[tuple[str, int]]] = {}
 
     print(
         f"  Processing {len(tasks)} frame(s) in parallel ({NUM_FRAME_WORKERS} workers)..."

@@ -955,8 +955,12 @@ def verified_search_one_ubmax(
         omega_rounded = round(omega, 4)
 
         has_transfer, run_dir_name, elapsed, exit_code = _probe_omega(
-            omega_rounded, ubmax_seu, diag_stride, geometry_mode,
-            dat_vs_omega_path, log_path,
+            omega_rounded,
+            ubmax_seu,
+            diag_stride,
+            geometry_mode,
+            dat_vs_omega_path,
+            log_path,
         )
 
         if exit_code != 0 and run_dir_name:
@@ -1079,15 +1083,17 @@ def _binary_refine_omega(
 
         mid = round((lo + hi) / 2.0, 4)
         has_transfer, _, _, exit_code = _probe_omega(
-            mid, ubmax_seu, diag_stride, geometry_mode,
-            dat_vs_omega_path, log_path,
+            mid,
+            ubmax_seu,
+            diag_stride,
+            geometry_mode,
+            dat_vs_omega_path,
+            log_path,
         )
 
         if exit_code != 0:
             with open(log_path, "a") as log:
-                log.write(
-                    f"  [refine] sim failed at {mid:.4f}, nudging up\n"
-                )
+                log.write(f"  [refine] sim failed at {mid:.4f}, nudging up\n")
                 log.flush()
             lo = mid
             continue
@@ -1099,9 +1105,7 @@ def _binary_refine_omega(
 
     result = round(hi, 4)
     with open(log_path, "a") as log:
-        log.write(
-            f"  [refine] result={result:.4f} (bracket [{lo:.4f}, {hi:.4f}])\n"
-        )
+        log.write(f"  [refine] result={result:.4f} (bracket [{lo:.4f}, {hi:.4f}])\n")
         log.flush()
 
     return result
@@ -1157,7 +1161,9 @@ def run_auto_omega_search(
         ubmax_nk_list.append(round(current, 4))
         current += step
 
-    print(f"\nAUTO OMEGA mode (verified): Ubmax range [{ub_start}, {ub_end}], step {ub_step}")
+    print(
+        f"\nAUTO OMEGA mode (verified): Ubmax range [{ub_start}, {ub_end}], step {ub_step}"
+    )
     print(
         f"  Ubmax values: {ubmax_nk_list[:10]}{'...' if len(ubmax_nk_list) > 10 else ''} "
         f"({len(ubmax_nk_list)} total)"
@@ -1252,10 +1258,7 @@ def run_auto_omega_search(
                     log.flush()
 
         # --- Injectivity guard ---
-        if (
-            abs(crit_omega - prev_critical_omega) < 1e-5
-            and prev_critical_omega > 0
-        ):
+        if abs(crit_omega - prev_critical_omega) < 1e-5 and prev_critical_omega > 0:
             with open(log_path, "a") as log:
                 log.write(
                     f"  [injectivity] coarse crit_omega={crit_omega:.4f} == "
@@ -1273,9 +1276,7 @@ def run_auto_omega_search(
             if refined > prev_critical_omega:
                 crit_omega = refined
                 with open(log_path, "a") as log:
-                    log.write(
-                        f"  [injectivity] refined to {crit_omega:.4f}\n"
-                    )
+                    log.write(f"  [injectivity] refined to {crit_omega:.4f}\n")
                     log.flush()
             elapsed = time.time() - search_start
             elapsed_min = elapsed / 60.0

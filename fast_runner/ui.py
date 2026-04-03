@@ -17,7 +17,7 @@ def select_from_menu(options: list, prompt: str) -> int:
 
 
 def checkbox_menu(options: list, prompt: str) -> list[int]:
-    selected = set()
+    selected: set[int] = set()
 
     while True:
         print()

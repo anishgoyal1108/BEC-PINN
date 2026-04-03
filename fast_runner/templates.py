@@ -46,10 +46,6 @@ _GI_GAMMA_DISS_LINE_INDEX = 131
 _GI_OMEGA_LINE_INDEX = 138
 _GI_DIAG_STRIDE_LINE_INDEX = 145
 
-_IMAG_NT = 133443
-_IMAG_NFRAMES = 330
-_IMAG_TFF = 5.33772
-
 _GI_NT_LINE_INDEX = 54
 _GI_NFRAMES_LINE_INDEX = 68
 _GI_TFF_LINE_INDEX = 82
@@ -59,6 +55,10 @@ _REAL_NT = 117268
 _REAL_NFRAMES = 290
 _REAL_TFF = 4.69072
 _BASE_NATOMS = 166667.0
+
+_IMAG_NT = _REAL_NT // 10
+_IMAG_NFRAMES = _REAL_NFRAMES // 10
+_IMAG_TFF = _REAL_TFF / 10.0
 
 
 @dataclass(frozen=True)
@@ -134,57 +134,486 @@ def format_param_for_line(p: ParamDef, value: float | int | str) -> str:
 
 
 DI_PARAMS: tuple[ParamDef, ...] = (
-    ParamDef("V0", "V0 (potential height, SEU)", _DI_V0_LINE_INDEX, 2000.0, "fortran_float", "di", True, True, False, False),
-    ParamDef("a", "a (relative depth)", _DI_A_LINE_INDEX, 1.0, "fortran_float", "di", True, True, False, False),
-    ParamDef("wd", "wd (disk width, SLU)", _DI_WD_LINE_INDEX, 1.0, "wd", "di", False, True, False, False),
-    ParamDef("wr", "wr (ring width, SLU)", _DI_WR_LINE_INDEX, 0.5, "fortran_float", "di", True, True, False, False),
-    ParamDef("R", "R (midtrack radius, SLU)", _DI_R_LINE_INDEX, 2.25, "fortran_float", "di", True, True, False, False),
-    ParamDef("n", "n (exponent)", _DI_N_LINE_INDEX, 1.0, "fortran_float", "di", True, True, False, False),
-    ParamDef("nrows", "nrows (array rows)", _DI_NROWS_LINE_INDEX, 2, "integer", "di", True, True, False, False),
-    ParamDef("ncols", "ncols (array columns)", _DI_NCOLS_LINE_INDEX, 2, "integer", "di", True, True, False, False),
-    ParamDef("xc_array", "xc_array (center X, SLU)", _DI_XC_LINE_INDEX, 100.0, "fortran_float", "di", True, True, False, False),
-    ParamDef("yc_array", "yc_array (center Y, SLU)", _DI_YC_LINE_INDEX, 100.0, "fortran_float", "di", True, True, False, False),
-    ParamDef("wperp", "wperp (perp barrier width, SLU)", _DI_WPERP_LINE_INDEX, 1.125, "fortran_sci", "di", True, True, False, False),
-    ParamDef("wpara", "wpara (para barrier width, SLU)", _DI_WPARA_LINE_INDEX, 1.125, "fortran_float", "di", True, True, False, False),
-    ParamDef("tramp_si", "tramp_si (ramp time, s)", _DI_TRAMP_LINE_INDEX, 0.1, "fortran_float", "di", True, True, False, False),
-    ParamDef("ton_si", "ton_si (hold time, s)", _DI_TON_LINE_INDEX, 0.1, "fortran_float", "di", True, True, False, False),
-    ParamDef("tpi_si", "tpi_si (phase imprint time, s)", _DI_TPI_LINE_INDEX, 0.025, "fortran_float", "di", True, True, False, False),
-    ParamDef("trel_si", "trel_si (release time, s)", _DI_TREL_LINE_INDEX, 0.005, "fortran_float", "di", True, True, False, False),
+    ParamDef(
+        "V0",
+        "V0 (potential height, SEU)",
+        _DI_V0_LINE_INDEX,
+        2000.0,
+        "fortran_float",
+        "di",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "a",
+        "a (relative depth)",
+        _DI_A_LINE_INDEX,
+        1.0,
+        "fortran_float",
+        "di",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "wd",
+        "wd (disk width, SLU)",
+        _DI_WD_LINE_INDEX,
+        1.0,
+        "wd",
+        "di",
+        False,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "wr",
+        "wr (ring width, SLU)",
+        _DI_WR_LINE_INDEX,
+        0.5,
+        "fortran_float",
+        "di",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "R",
+        "R (midtrack radius, SLU)",
+        _DI_R_LINE_INDEX,
+        2.25,
+        "fortran_float",
+        "di",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "n",
+        "n (exponent)",
+        _DI_N_LINE_INDEX,
+        1.0,
+        "fortran_float",
+        "di",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "nrows",
+        "nrows (array rows)",
+        _DI_NROWS_LINE_INDEX,
+        2,
+        "integer",
+        "di",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "ncols",
+        "ncols (array columns)",
+        _DI_NCOLS_LINE_INDEX,
+        2,
+        "integer",
+        "di",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "xc_array",
+        "xc_array (center X, SLU)",
+        _DI_XC_LINE_INDEX,
+        100.0,
+        "fortran_float",
+        "di",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "yc_array",
+        "yc_array (center Y, SLU)",
+        _DI_YC_LINE_INDEX,
+        100.0,
+        "fortran_float",
+        "di",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "wperp",
+        "wperp (perp barrier width, SLU)",
+        _DI_WPERP_LINE_INDEX,
+        1.125,
+        "fortran_sci",
+        "di",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "wpara",
+        "wpara (para barrier width, SLU)",
+        _DI_WPARA_LINE_INDEX,
+        1.125,
+        "fortran_float",
+        "di",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "tramp_si",
+        "tramp_si (ramp time, s)",
+        _DI_TRAMP_LINE_INDEX,
+        0.1,
+        "fortran_float",
+        "di",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "ton_si",
+        "ton_si (hold time, s)",
+        _DI_TON_LINE_INDEX,
+        0.1,
+        "fortran_float",
+        "di",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "tpi_si",
+        "tpi_si (phase imprint time, s)",
+        _DI_TPI_LINE_INDEX,
+        0.025,
+        "fortran_float",
+        "di",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "trel_si",
+        "trel_si (release time, s)",
+        _DI_TREL_LINE_INDEX,
+        0.005,
+        "fortran_float",
+        "di",
+        True,
+        True,
+        False,
+        False,
+    ),
 )
 
 GI_SHARED_PARAMS: tuple[ParamDef, ...] = (
-    ParamDef("Natoms", "Natoms (atom count)", _GI_NATOMS_LINE_INDEX, _BASE_NATOMS, "natoms", "gi_shared", True, True, False, False),
-    ParamDef("Nx", "Nx (x grid points)", _GI_NX_LINE_INDEX, 400, "integer", "gi_shared", True, True, False, False),
-    ParamDef("Ny", "Ny (y grid points)", _GI_NY_LINE_INDEX, 400, "integer", "gi_shared", True, True, False, False),
-    ParamDef("dx", "dx (x grid step, SLU)", _GI_DX_LINE_INDEX, 0.061875, "fortran_float", "gi_shared", True, True, False, False),
-    ParamDef("dy", "dy (y grid step, SLU)", _GI_DY_LINE_INDEX, 0.061875, "fortran_float", "gi_shared", True, True, False, False),
-    ParamDef("g_bar", "g_bar (nonlinear coeff)", _GI_GBAR_LINE_INDEX, 0.0316, "fortran_float", "gi_shared", True, True, False, False),
-    ParamDef("dt", "dt (time step, STU)", _GI_DT_LINE_INDEX, 0.00004, "raw", "gi_shared", False, True, False, False),
-    ParamDef("tfi", "tfi (initial time, STU)", _GI_TFI_LINE_INDEX, 0.0, "fortran_float", "gi_shared", True, True, False, False),
-    ParamDef("L0", "L0 (length unit, m)", _GI_L0_LINE_INDEX, "10.0d-6", "raw", "gi_shared", True, True, False, False),
-    ParamDef("output_frames", "output_frames (0=no, 1=yes)", _GI_OUTPUT_FRAMES_LINE_INDEX, 1, "integer", "gi_shared", True, True, False, False),
-    ParamDef("with_diss", "with_diss (0=no, 1=yes)", _GI_WITH_DISS_LINE_INDEX, 0, "integer", "gi_shared", True, True, False, False),
-    ParamDef("gamma_diss", "gamma_diss (dissipation)", _GI_GAMMA_DISS_LINE_INDEX, 0.0, "fortran_float", "gi_shared", True, True, False, False),
-    ParamDef("omega_rf", "omega_rf (rotation, rad/s)", _GI_OMEGA_LINE_INDEX, 0.1, "fortran_float", "gi_shared", False, True, False, False),
-    ParamDef("diag_stride", "diag_stride (diagnostic stride)", _GI_DIAG_STRIDE_LINE_INDEX, 15, "integer", "gi_shared", True, True, False, False),
+    ParamDef(
+        "Natoms",
+        "Natoms (atom count)",
+        _GI_NATOMS_LINE_INDEX,
+        _BASE_NATOMS,
+        "natoms",
+        "gi_shared",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "Nx",
+        "Nx (x grid points)",
+        _GI_NX_LINE_INDEX,
+        400,
+        "integer",
+        "gi_shared",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "Ny",
+        "Ny (y grid points)",
+        _GI_NY_LINE_INDEX,
+        400,
+        "integer",
+        "gi_shared",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "dx",
+        "dx (x grid step, SLU)",
+        _GI_DX_LINE_INDEX,
+        0.061875,
+        "fortran_float",
+        "gi_shared",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "dy",
+        "dy (y grid step, SLU)",
+        _GI_DY_LINE_INDEX,
+        0.061875,
+        "fortran_float",
+        "gi_shared",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "g_bar",
+        "g_bar (nonlinear coeff)",
+        _GI_GBAR_LINE_INDEX,
+        0.0316,
+        "fortran_float",
+        "gi_shared",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "dt",
+        "dt (time step, STU)",
+        _GI_DT_LINE_INDEX,
+        0.00004,
+        "raw",
+        "gi_shared",
+        False,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "tfi",
+        "tfi (initial time, STU)",
+        _GI_TFI_LINE_INDEX,
+        0.0,
+        "fortran_float",
+        "gi_shared",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "L0",
+        "L0 (length unit, m)",
+        _GI_L0_LINE_INDEX,
+        "10.0d-6",
+        "raw",
+        "gi_shared",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "output_frames",
+        "output_frames (0=no, 1=yes)",
+        _GI_OUTPUT_FRAMES_LINE_INDEX,
+        1,
+        "integer",
+        "gi_shared",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "with_diss",
+        "with_diss (0=no, 1=yes)",
+        _GI_WITH_DISS_LINE_INDEX,
+        0,
+        "integer",
+        "gi_shared",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "gamma_diss",
+        "gamma_diss (dissipation)",
+        _GI_GAMMA_DISS_LINE_INDEX,
+        0.0,
+        "fortran_float",
+        "gi_shared",
+        True,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "omega_rf",
+        "omega_rf (rotation, rad/s)",
+        _GI_OMEGA_LINE_INDEX,
+        0.1,
+        "fortran_float",
+        "gi_shared",
+        False,
+        True,
+        False,
+        False,
+    ),
+    ParamDef(
+        "diag_stride",
+        "diag_stride (diagnostic stride)",
+        _GI_DIAG_STRIDE_LINE_INDEX,
+        15,
+        "integer",
+        "gi_shared",
+        True,
+        True,
+        False,
+        False,
+    ),
 )
 
 GI_IMAG_PARAMS: tuple[ParamDef, ...] = (
-    ParamDef("Nt_imag", "Nt - imag (timesteps)", _GI_NT_LINE_INDEX, _IMAG_NT, "integer", "gi_imag", False, True, True, False),
-    ParamDef("Nframes_imag", "Nframes - imag (output frames)", _GI_NFRAMES_LINE_INDEX, _IMAG_NFRAMES, "integer", "gi_imag", False, True, True, False),
-    ParamDef("tff_imag", "tff - imag (final time, STU)", _GI_TFF_LINE_INDEX, _IMAG_TFF, "fortran_float", "gi_imag", False, True, True, False),
+    ParamDef(
+        "Nt_imag",
+        "Nt - imag (timesteps)",
+        _GI_NT_LINE_INDEX,
+        _IMAG_NT,
+        "integer",
+        "gi_imag",
+        False,
+        True,
+        True,
+        False,
+    ),
+    ParamDef(
+        "Nframes_imag",
+        "Nframes - imag (output frames)",
+        _GI_NFRAMES_LINE_INDEX,
+        _IMAG_NFRAMES,
+        "integer",
+        "gi_imag",
+        False,
+        True,
+        True,
+        False,
+    ),
+    ParamDef(
+        "tff_imag",
+        "tff - imag (final time, STU)",
+        _GI_TFF_LINE_INDEX,
+        _IMAG_TFF,
+        "fortran_float",
+        "gi_imag",
+        False,
+        True,
+        True,
+        False,
+    ),
 )
 
 GI_REAL_PARAMS: tuple[ParamDef, ...] = (
-    ParamDef("Nt_real", "Nt - real (timesteps)", _GI_NT_LINE_INDEX, _REAL_NT, "integer", "gi_real", False, True, True, False),
-    ParamDef("Nframes_real", "Nframes - real (output frames)", _GI_NFRAMES_LINE_INDEX, _REAL_NFRAMES, "integer", "gi_real", False, True, True, False),
-    ParamDef("tff_real", "tff - real (final time, STU)", _GI_TFF_LINE_INDEX, _REAL_TFF, "fortran_float", "gi_real", False, True, True, False),
+    ParamDef(
+        "Nt_real",
+        "Nt - real (timesteps)",
+        _GI_NT_LINE_INDEX,
+        _REAL_NT,
+        "integer",
+        "gi_real",
+        False,
+        True,
+        True,
+        False,
+    ),
+    ParamDef(
+        "Nframes_real",
+        "Nframes - real (output frames)",
+        _GI_NFRAMES_LINE_INDEX,
+        _REAL_NFRAMES,
+        "integer",
+        "gi_real",
+        False,
+        True,
+        True,
+        False,
+    ),
+    ParamDef(
+        "tff_real",
+        "tff - real (final time, STU)",
+        _GI_TFF_LINE_INDEX,
+        _REAL_TFF,
+        "fortran_float",
+        "gi_real",
+        False,
+        True,
+        True,
+        False,
+    ),
 )
 
 AUTO_GI_FLAG_PARAMS: tuple[ParamDef, ...] = (
-    ParamDef("real_or_imag", "real_or_imag (internal)", _GI_REAL_OR_IMAG_LINE_INDEX, 0, "integer", "gi_shared", False, False, False, True),
-    ParamDef("read_initial_wf", "read_initial_wf (internal)", _GI_READ_INITIAL_WF_LINE_INDEX, 0, "integer", "gi_shared", False, False, False, True),
-    ParamDef("phase_imprint", "phase_imprint (internal)", _GI_PHASE_IMPRINT_LINE_INDEX, 0, "integer", "gi_shared", False, False, False, True),
+    ParamDef(
+        "real_or_imag",
+        "real_or_imag (internal)",
+        _GI_REAL_OR_IMAG_LINE_INDEX,
+        0,
+        "integer",
+        "gi_shared",
+        False,
+        False,
+        False,
+        True,
+    ),
+    ParamDef(
+        "read_initial_wf",
+        "read_initial_wf (internal)",
+        _GI_READ_INITIAL_WF_LINE_INDEX,
+        0,
+        "integer",
+        "gi_shared",
+        False,
+        False,
+        False,
+        True,
+    ),
+    ParamDef(
+        "phase_imprint",
+        "phase_imprint (internal)",
+        _GI_PHASE_IMPRINT_LINE_INDEX,
+        0,
+        "integer",
+        "gi_shared",
+        False,
+        False,
+        False,
+        True,
+    ),
 )
 
 ALL_CUSTOM_PARAMS: tuple[ParamDef, ...] = (
@@ -234,22 +663,17 @@ def prepare_custom_directory(
             lines.pop(_DI_UB_ROW1_LINE_INDEX)
         di = "".join(lines)
     else:
-        di = replace_ubmax_matrix_in_di(
-            di, ubmax_seu, ubmax_seu, ubmax_seu, ubmax_seu
-        )
+        di = replace_ubmax_matrix_in_di(di, ubmax_seu, ubmax_seu, ubmax_seu, ubmax_seu)
 
     gi_imag = apply_line_overrides(gi_template, gi_shared_overrides)
     gi_imag = apply_line_overrides(gi_imag, gi_imag_overrides)
     gi_imag = replace_real_or_imag_in_gi(gi_imag, 0)
     gi_imag = replace_read_initial_wf_in_gi(gi_imag, 0)
     gi_imag = replace_phase_imprint_in_gi(gi_imag, 0)
+    gi_imag = replace_output_frames_in_gi(gi_imag, 0)
     gi_imag = replace_omega_in_gi(gi_imag, omega)
     gi_imag = replace_diag_stride_in_gi(gi_imag, diag_stride)
-    natoms = (
-        natoms_total
-        if natoms_total is not None
-        else _BASE_NATOMS * nrows * ncols
-    )
+    natoms = natoms_total if natoms_total is not None else _BASE_NATOMS * nrows * ncols
     gi_imag = replace_natoms_in_gi(gi_imag, natoms)
 
     gi_real = apply_line_overrides(gi_template, gi_shared_overrides)
@@ -269,7 +693,6 @@ def prepare_custom_directory(
         f.write(gi_real)
 
     return run_dir_name, run_dir
-
 
 
 def validate_template_dir(template_dir: str = TEMPLATE_DIR) -> None:
@@ -436,6 +859,13 @@ def replace_phase_imprint_in_gi(content: str, value: int) -> str:
     return "".join(lines)
 
 
+def replace_output_frames_in_gi(content: str, value: int) -> str:
+    lines = content.splitlines(keepends=True)
+    if len(lines) > _GI_OUTPUT_FRAMES_LINE_INDEX:
+        lines[_GI_OUTPUT_FRAMES_LINE_INDEX] = f"{value}\n"
+    return "".join(lines)
+
+
 def build_gi_phase_content(
     template_content: str,
     omega: float,
@@ -457,6 +887,11 @@ def build_gi_phase_content(
         content = replace_nt_in_gi(content, _REAL_NT)
         content = replace_nframes_in_gi(content, _REAL_NFRAMES)
         content = replace_tff_in_gi(content, _REAL_TFF)
+    else:
+        content = replace_nt_in_gi(content, _IMAG_NT)
+        content = replace_nframes_in_gi(content, _IMAG_NFRAMES)
+        content = replace_tff_in_gi(content, _IMAG_TFF)
+        content = replace_output_frames_in_gi(content, 0)
     return content
 
 

@@ -1,4 +1,3 @@
-import glob
 import os
 import time
 
@@ -127,8 +126,6 @@ OMEGA_LARGE_JUMP_THRESHOLD = 0.05
 
 NUM_FRAME_WORKERS = 8
 
-CACHE_ROOT = os.path.join(SCRIPT_DIR, "cache")
-
 _SWEEP_MODE = "ubmax"
 _GEOMETRY_MODE = "ring"
 _IMAG_ONLY_MODE = False
@@ -171,16 +168,11 @@ def _mode_token(mode: str | None = None) -> str:
     return "RING"
 
 
+_CACHE_ROOT = os.path.join(SCRIPT_DIR, "cache")
+
+
 def get_mode_cache_dir(mode: str | None = None) -> str:
-    cache_dir = os.path.join(CACHE_ROOT, _mode_token(mode))
-    os.makedirs(cache_dir, exist_ok=True)
-    return cache_dir
-
-
-def get_omega_cache_dir(run_kind: str, mode: str | None = None) -> str:
-    if run_kind not in ("1x1", "2x2"):
-        raise ValueError(f"Invalid run_kind: {run_kind}")
-    cache_dir = os.path.join(get_mode_cache_dir(mode), f"OmegaR_{run_kind}")
+    cache_dir = os.path.join(_CACHE_ROOT, _mode_token(mode))
     os.makedirs(cache_dir, exist_ok=True)
     return cache_dir
 
@@ -192,22 +184,3 @@ def get_critical_omega_cache_path(mode: str | None = None) -> str:
         OUTPUT_DAT_DIR,
         f"critical_omega_vs_ubmax_geom_{_output_geom_suffix(mode)}.dat",
     )
-
-
-def _initialize_cache_layout() -> None:
-    for mode in ("ring", "target"):
-        get_mode_cache_dir(mode)
-        get_omega_cache_dir("1x1", mode)
-        get_omega_cache_dir("2x2", mode)
-
-
-_initialize_cache_layout()
-
-
-def get_cache_status_summary() -> str:
-    cache_dir = get_omega_cache_dir("1x1")
-    if os.path.isdir(cache_dir):
-        cache_files = glob.glob(os.path.join(cache_dir, "ground_state_*.dat"))
-        if cache_files:
-            return f"{len(cache_files)} omega value(s) cached"
-    return "none"

@@ -27,7 +27,6 @@ def write_execution_log_header(
     script_start: float,
     log_header: str,
     template_name: str,
-    cached_ground_state: bool = False,
     imag_only: bool = False,
 ) -> None:
     log.write(
@@ -35,10 +34,6 @@ def write_execution_log_header(
         + log_header
         + f"Using {template_name} (with transfer physics and OpenMP)\n"
     )
-    if cached_ground_state:
-        log.write(
-            "Using cached ground state for omega_r (imag time skipped for repeated Ubmax values)\n"
-        )
     if imag_only:
         log.write("IMAGINARY TIME ONLY MODE: Real-time simulations will be skipped\n")
     log.flush()

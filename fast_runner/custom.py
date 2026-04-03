@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .batch import _existing_1x1_run_dirs_for_omega, run_simulation
-from .cache import find_or_create_ground_state_omega
+from .batch import run_simulation
 from .mode_utils import is_imag_only_mode
 from .physics import ubmax_scaled_from_T_nK
 from .settings import get_geometry_mode
@@ -234,7 +233,9 @@ def _edit_param_loop(
                         "\n  dt changed but imaginary/real time parameters may be inconsistent."
                     )
                     print("  1. Keep current Nt / Nframes / tff as shown")
-                    print("  2. Auto-recompute time parameters from dt (like Guided mode)")
+                    print(
+                        "  2. Auto-recompute time parameters from dt (like Guided mode)"
+                    )
                     print("  3. Continue editing")
                     sub = input("Choose (1/2/3): ").strip()
                     if sub == "2":
@@ -270,13 +271,7 @@ def _edit_param_loop(
             continue
         _n, p, grp = row
         cur = (
-            di
-            if grp == "di"
-            else gis
-            if grp == "gis"
-            else gii
-            if grp == "gii"
-            else gir
+            di if grp == "di" else gis if grp == "gis" else gii if grp == "gii" else gir
         )
         raw = input(f"New value for {p.label} [{cur[p.key]}]: ").strip()
         if not raw:
@@ -490,20 +485,7 @@ def _execute_custom_spec(spec: CustomExperimentSpec) -> None:
         natoms_total=spec.natoms_total,
     )
     print(f"\nCreated run directory: {run_dir_name}")
-
-    cache_list = [run_dir_name] + [
-        d
-        for d in _existing_1x1_run_dirs_for_omega(
-            spec.omega_rf, spec.geometry_mode
-        )
-        if d != run_dir_name
-    ]
-    cached = find_or_create_ground_state_omega(
-        spec.omega_rf,
-        cache_list,
-        geometry_mode=spec.geometry_mode,
-    )
-    run_simulation(run_dir_name, cached, is_imag_only_mode())
+    run_simulation(run_dir_name, is_imag_only_mode())
 
 
 def run_custom_experiment() -> None:

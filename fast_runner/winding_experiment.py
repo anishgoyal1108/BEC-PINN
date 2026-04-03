@@ -172,8 +172,10 @@ def run_bec_pinn_for_cases(bec_root: str, selection: list[dict]) -> None:
 
 def compare_original_vs_bec_pinn(bec_root: str, selection: list[dict]) -> None:
     """Compare winding numbers at release for original vs BEC-PINN runs."""
-    print("\nComparing original DTAP runs vs BEC-PINN cases at release line "
-          f"{RELEASE_LINE_INDEX} ...")
+    print(
+        "\nComparing original DTAP runs vs BEC-PINN cases at release line "
+        f"{RELEASE_LINE_INDEX} ..."
+    )
     for r in selection:
         run = r["run"]
         name = run["dir_name"]
@@ -233,10 +235,7 @@ def main() -> None:
     print(f"Selected {len(selection)} representative runs:")
     for r in selection:
         top, bot = r["top"], r["bot"]
-        print(
-            f"  {r['run']['dir_name']}: "
-            f"top={top!r} bot={bot!r} -> {r['why']}"
-        )
+        print(f"  {r['run']['dir_name']}: " f"top={top!r} bot={bot!r} -> {r['why']}")
 
     mirror_cases_to_bec_pinn(bec_root, selection)
     run_bec_pinn_for_cases(bec_root, selection)
@@ -245,4 +244,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

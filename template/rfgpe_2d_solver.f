@@ -32,8 +32,8 @@ c	end: input declarations
       integer*4 i, j, k, n, frame_counter, ix, iy
       real*8 delta_tf, tc, tfc, optden
       character*80 counter_string
-      character*12 f1
-      character*16 filename
+      character*14 f1
+      character*18 filename
 ccccc adding code to output wave function cuts
       character*80 cutfilename
 ccccc finished code to output wave function cuts
