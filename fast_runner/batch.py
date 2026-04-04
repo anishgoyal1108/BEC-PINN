@@ -65,6 +65,7 @@ def run_simulation(
 
     try:
         # Always run imaginary time to obtain ground state
+        print(f"  {run_dir_name}: [IMAG] Starting imaginary-time evolution...")
         shutil.copy2(
             os.path.join(run_dir, "di_modified.dat"),
             os.path.join(run_dir, "dtap_inputs.dat"),
@@ -86,6 +87,7 @@ def run_simulation(
         if exit_code != 0:
             return run_dir_name, time.time() - start, exit_code
 
+        print(f"  {run_dir_name}: [IMAG] Imaginary-time evolution complete.")
         imag_folder = os.path.join(run_dir, f"{run_dir_name}_imag")
         if os.path.exists(os.path.join(run_dir, "sim_folder")):
             shutil.move(os.path.join(run_dir, "sim_folder"), imag_folder)

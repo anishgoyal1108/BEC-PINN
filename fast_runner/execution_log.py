@@ -9,11 +9,11 @@ def print_simulation_debug(
 ) -> None:
     if imag_only:
         print(
-            f"  [DEBUG] {run_dir_name}: imag_only={imag_only}, IMAG_ONLY={global_imag_only}, will SKIP real-time"
+            f"  [DEBUG] {run_dir_name}: imag_only={imag_only}, IMAG_ONLY={global_imag_only}, will run imag ONLY (skip real-time)"
         )
     else:
         print(
-            f"  [DEBUG] {run_dir_name}: imag_only={imag_only}, IMAG_ONLY={global_imag_only}, will RUN real-time"
+            f"  [DEBUG] {run_dir_name}: imag_only={imag_only}, IMAG_ONLY={global_imag_only}, will run imag THEN real-time"
         )
 
 
